@@ -654,14 +654,16 @@ def render_section_cards(sections: pd.DataFrame, k: dict, nav_query: str) -> Non
     if sections.empty:
         return
     rows = list(sections.itertuples(index=False))
-    cards = "".join(_section_card_html(r, section_href(r.section, nav_query)) for r in rows)
-    cards += _total_card_html(k, len(rows), section_href("General / Global View", nav_query))
+    order = [sec.key for sec in config.SECTIONS]                       # = the tab radio's option order
+    cards = "".join(_section_card_html(r, section_href(r.section, nav_query), order.index(r.section))
+                    for r in rows if r.section in order)
+    cards += _total_card_html(k, len(rows), section_href("General / Global View", nav_query), 0)
     st.html('<div class="card-title" style="margin:14px 0 2px">Sales by section'
             '<span class="muted">tap a card to open its tab</span></div>'
             f'<div class="sec-grid">{cards}</div>')
 
 
-def _section_card_html(r, href: str) -> str:
+def _section_card_html(r, href: str, tab_index: int) -> str:
     sec = config.SECTION_BY_KEY.get(r.section)
     icon = sec.icon if sec else "▪"
     color = config.CHART_COLORS.get(r.section, T["ink_3"])
@@ -674,7 +676,7 @@ def _section_card_html(r, href: str) -> str:
     disc = f'<span>Discount <b>{fmt_n(r.discount)}</b></span>' if r.discount else ""
     pct = max(0.0, min(100.0, float(r.share) * 100))
     return (
-        f'<a class="sec-card" href="{esc(href)}" target="_self" style="--accent:{color}" aria-label="Open {esc(r.section)}">'
+        f'<a class="sec-card" href="{esc(href)}" data-tab="{tab_index}" target="_self" style="--accent:{color}" aria-label="Open {esc(r.section)}">'
         f'<div class="sec-card-head"><div class="sec-card-icon">{icon}</div>'
         f'<div><div class="sec-card-name">{esc(r.section)}</div><div class="sec-card-kind">{kind}</div></div></div>'
         f'<div class="sec-card-open">Open ↗</div>'
@@ -685,11 +687,11 @@ def _section_card_html(r, href: str) -> str:
     )
 
 
-def _total_card_html(k: dict, n_sections: int, href: str) -> str:
+def _total_card_html(k: dict, n_sections: int, href: str, tab_index: int) -> str:
     checks = fmt_n(k["checks"]) if k["checks"] else "—"
     aov = fmt_n(k["aov"]) if k["checks"] else "—"
     return (
-        f'<a class="sec-card total" href="{esc(href)}" target="_self" style="--accent:{T["green"]}" aria-label="Back to the top of General">'
+        f'<a class="sec-card total" href="{esc(href)}" data-tab="{tab_index}" target="_self" style="--accent:{T["green"]}" aria-label="Back to the top of General">'
         f'<div class="sec-card-head"><div class="sec-card-icon">Σ</div>'
         f'<div><div class="sec-card-name">All sections</div><div class="sec-card-kind">{n_sections} sections · grand total</div></div></div>'
         f'<div class="sec-card-open">Top ↑</div>'
@@ -697,6 +699,50 @@ def _total_card_html(k: dict, n_sections: int, href: str) -> str:
         f'<div class="sec-card-meta"><span>Checks <b>{checks}</b></span><span>AOV <b>{aov}</b></span>'
         f'<span>Share <b>100%</b></span></div>'
         f'<div class="sec-card-share"><span style="width:100%"></span></div></a>'
+    )
+
+
+def install_nav_bridge() -> None:
+    """Make a section-card click behave exactly like a tab-pill click (in-app, no page reload).
+
+    The cards are links to ?section=… (the no-script fallback). This 0-px component installs ONE
+    delegated click listener on the app document: a click on ``a.sec-card[data-tab]`` selects the
+    matching option of the tab radio (the same radio the pills use) and scrolls to the top. Streamlit
+    then reruns in place — the same fast path as clicking a pill — so there is no white reload."""
+    components.html(
+        """<script>
+        (function () {
+          var win = window.parent, doc = win.document;
+          if (win.__cop17NavBridge) { return; }
+          win.__cop17NavBridge = true;
+          function toTop(behavior) {
+            [doc.querySelector('section[data-testid="stMain"]'), doc.querySelector('[data-testid="stAppViewContainer"]'),
+             doc.scrollingElement, doc.documentElement, doc.body].forEach(function (el) {
+              if (!el) { return; }
+              try { el.scrollTo({top: 0, left: 0, behavior: behavior}); } catch (e) { el.scrollTop = 0; }
+            });
+            try { win.scrollTo({top: 0, behavior: behavior}); } catch (e) {}
+          }
+          function tabGroup() {
+            return doc.querySelector('.st-key-tabs [data-testid="stRadioGroup"]')
+                || doc.querySelector('[data-testid="stRadioGroup"][aria-label="Section"]');
+          }
+          doc.addEventListener('click', function (e) {
+            var card = e.target && e.target.closest ? e.target.closest('a.sec-card[data-tab]') : null;
+            if (!card) { return; }
+            var group = tabGroup();
+            if (!group) { return; }                      // no radio found → let the link navigate
+            var input = group.querySelector('input[type="radio"][value="' + card.getAttribute('data-tab') + '"]');
+            if (!input) { return; }
+            e.preventDefault();
+            e.stopPropagation();
+            if (!input.checked) { input.click(); }      // same as tapping the pill → in-app rerun
+            toTop('smooth');
+            var n = 0, t = setInterval(function () { toTop(++n < 3 ? 'smooth' : 'auto'); if (n >= 10) { clearInterval(t); } }, 150);
+          }, true);
+        })();
+        </script>""",
+        height=0,
     )
 
 
