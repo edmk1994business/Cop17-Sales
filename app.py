@@ -4,6 +4,8 @@ Run locally:   streamlit run app.py
 Streamlit Cloud: main file = app.py, Python 3.11+, secrets → SOURCE_URL (optional).
 
 Page order: masthead → date controls → ↻ Refresh data → section tabs → section page.
+Navigation: the tab pills are an st.radio; the section cards on General are links to ?section=<slug>,
+which apply_query_params() turns into the selected tab on the fresh page load (always at the top).
 """
 from __future__ import annotations
 
@@ -33,17 +35,13 @@ LOCAL_PATH = _secret("LOCAL_PATH", config.LOCAL_FALLBACK)
 # ?refresh=1 (used by the RPA after an export) or the Refresh button clears the 5-minute cache.
 if st.query_params.get("refresh"):
     data.load_dataset.clear()
-    st.query_params.clear()
+    del st.query_params["refresh"]
+
+# ?section=<slug>&preset=<slug>[&start=…&end=…] — what a section-card link carries; read once per session.
+ui.apply_query_params()
 
 with st.spinner("Loading sales workbook…"):
     ds = data.load_dataset(SOURCE_URL, LOCAL_PATH)
-
-
-def go_to_section(section_key: str | None) -> None:
-    """Card click on General: switch the tab (None = stay) and land at the top on the rerun."""
-    if section_key is not None:
-        st.session_state["section"] = config.SECTION_BY_KEY[section_key].label
-    st.session_state["scroll_top"] = True
 
 
 # ------------------------------------------------------------------ masthead
@@ -88,7 +86,7 @@ show_discount = k["has_discount"]  # "Сумма скидки" is omitted everyw
 if section.kind == "global":
     sections = data.section_totals(df, periods)
     ui.render_charts(sections, data.daily_by_section(df))
-    ui.render_section_cards(sections, k, go_to_section)          # click → opens that tab, lands at the top
+    ui.render_section_cards(sections, k, ui.nav_query())         # card = link → opens that tab at the top
 elif section.kind == "compliments":
     ui.render_section_table(data.section_totals(df), show_discount, title="Compliments by section")
 
