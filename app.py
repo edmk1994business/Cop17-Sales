@@ -101,5 +101,6 @@ if section.kind == "sheet":                                  # a period-summary 
 if not df.empty:
     ui.render_overall_totals(data.payment_totals(df), show_discount,
                              subtitle="by payment type · daily sheets only" if periods else "by payment type")
-    ui.render_daily_table(data.daily_pivot(df), data.payment_columns(df), show_discount, k, periods)
+    pay_cols = [] if section.kind == "compliments" else data.payment_columns(df)   # compliments have one "payment"
+    ui.render_daily_table(data.daily_pivot(df), pay_cols, show_discount, k, periods)
     ui.render_raw(data.raw_records(df), section_key, start, end)
