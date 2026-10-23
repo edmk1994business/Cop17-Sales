@@ -52,7 +52,8 @@ def fmt_pct(x) -> str:
 
 
 def fmt_day(d: date) -> str:
-    return f"{d.strftime('%a')} {d.day} {d.strftime('%b')}"
+    """'Sat 10 Oct 2026'."""
+    return f"{d.strftime('%a')} {d.day} {d.strftime('%b %Y')}"
 
 
 def esc(s) -> str:
@@ -118,7 +119,7 @@ def inject_css() -> None:
 
     /* ---- header ---- */
     .cop-head {{ display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin: 2px 0 6px; }}
-    .cop-logo {{ width:200px; max-width:100%; height:auto; border-radius:14px; border:1px solid var(--border); background:#fff; padding:10px 14px; object-fit:contain; box-shadow: var(--shadow); image-rendering: -webkit-optimize-contrast; }}
+    .cop-logo {{ width:220px; max-width:100%; height:auto; border-radius:14px; border:1px solid var(--border); background:#fff; padding:12px 16px; margin:2px 4px 2px 0; object-fit:contain; box-shadow: var(--shadow); image-rendering: -webkit-optimize-contrast; }}
     .cop-title {{ font-size: clamp(1.35rem, 2.4vw, 1.9rem); font-weight:800; letter-spacing:-0.02em; line-height:1.1; color:var(--ink); }}
     .cop-sub {{ color: var(--ink-2); font-size:.92rem; margin-top:4px; }}
     .cop-status {{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }}
@@ -203,10 +204,10 @@ def inject_css() -> None:
     [class*="st-key-seccard_"] {{ position: relative; }}
     [class*="st-key-seccard_"] [data-testid="stVerticalBlock"] {{ gap: 0; }}
     [class*="st-key-open_"] {{ position:absolute; inset:0; z-index:2; }}
-    [class*="st-key-open_"] button {{ position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; border:0; padding:0; margin:0; }}
+    [class*="st-key-open_"] button {{ position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; border:0; padding:0; margin:0; touch-action:manipulation; -webkit-tap-highlight-color: transparent; }}
     [class*="st-key-open_"] button:focus-visible {{ opacity:1; background:transparent; outline:3px solid var(--green); outline-offset:-3px; border-radius:var(--radius); }}
     [class*="st-key-open_"] button * {{ display:none; }}
-    .sec-card {{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px 12px; position:relative; overflow:hidden; min-height:138px; transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }}
+    .sec-card {{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px 12px; position:relative; overflow:hidden; min-height:138px; transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; pointer-events:none; }}
     .sec-card:before {{ content:""; position:absolute; left:0; right:0; top:0; height:4px; background: var(--accent); }}
     [class*="st-key-seccard_"]:hover .sec-card {{ transform: translateY(-3px); box-shadow: 0 16px 28px -14px rgba(21,35,27,.3); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }}
     .sec-card-head {{ display:flex; align-items:center; gap:10px; }}
@@ -235,9 +236,9 @@ def inject_css() -> None:
     table.dt tr:last-child td {{ border-bottom:none; }}
     table.dt .num {{ text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap; }}
     table.dt .dim {{ color: var(--ink-2); }}
-    table.dt .date-cell {{ font-weight:700; white-space:nowrap; vertical-align:middle; color:var(--ink); width:1%; }}
-    table.dt .total-cell {{ font-weight:800; font-size:.95rem; white-space:nowrap; font-variant-numeric: tabular-nums; color:var(--ink); border-right:1px solid #EEF1EC; width:1%; padding-right:18px; }}
-    table.dt thead th:first-child {{ color: var(--ink); }}
+    table.dt .date-cell {{ font-weight:700; white-space:nowrap; vertical-align:middle; color:var(--ink); width:1%; padding-right:18px; }}
+    table.dt .total-cell {{ font-weight:800; font-size:.95rem; white-space:nowrap; font-variant-numeric: tabular-nums; color:var(--ink); border-left:1px solid #EEF1EC; border-right:1px solid #EEF1EC; width:1%; padding:9px 18px; background:#FBFCFA; }}
+    table.dt thead th:nth-child(2) {{ color: var(--ink); }}
     table.dt tr.grand .total-cell {{ color: var(--green-dark); font-size:1rem; }}
     table.dt .date-cell small {{ display:block; font-weight:500; color:var(--ink-3); font-size:.74rem; margin-top:2px; }}
     table.dt tr.total td {{ font-weight:800; background: #F3F6F2; border-top:1px solid var(--border); }}
@@ -265,7 +266,7 @@ def inject_css() -> None:
         .st-key-tabs [data-testid="stRadioGroup"], .st-key-presets [data-testid="stRadioGroup"] {{
             flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; padding-bottom:10px; scrollbar-width:thin; -webkit-overflow-scrolling:touch;
         }}
-        .cop-logo {{ width:160px; padding:8px 10px; }}
+        .cop-logo {{ width:180px; padding:8px 10px; }}
         .cop-head {{ gap:14px; }}
         .kpi-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; }}
         .kpi {{ padding:12px 12px 10px 16px; }}
@@ -324,10 +325,16 @@ def render_header(ds: Dataset) -> None:
 
 
 # ----------------------------------------------------------------------------- navigation & dates
+def _request_scroll_top() -> None:
+    st.session_state["scroll_top"] = True
+
+
 def render_tabs() -> str:
+    """The tab bar. Any tab change (click, or a card's callback) lands the page at the very top."""
     labels = [s.label for s in config.SECTIONS]
     with st.container(key="tabs"):
-        choice = st.radio("Section", labels, horizontal=True, label_visibility="collapsed", key="section", width="stretch")
+        choice = st.radio("Section", labels, horizontal=True, label_visibility="collapsed", key="section",
+                          width="stretch", on_change=_request_scroll_top)
     return config.SECTIONS[labels.index(choice)].key
 
 
@@ -428,25 +435,23 @@ def render_excluded_note(excluded: list[PeriodSummary]) -> None:
 
 
 def render_period_card(p: PeriodSummary, info: SectionInfo | None) -> None:
-    """The column-C summary of a period sheet: total first, then period / lines, checks."""
+    """The column-C summary of a period sheet: date/period → total → line / checks."""
     checks = fmt_n(p.checks) if p.checks else "—"
     if p.entries:
         dated = any(d for d, _, _ in p.entries)
         rows = "".join(
-            f'<tr><td class="total-cell">{fmt_n(amount)}</td>'
-            + (f'<td class="dim">{esc(fmt_day(d)) if d else "—"}</td>' if dated else "")
-            + f'<td>{esc(label)}</td></tr>'
+            "<tr>" + (f'<td class="date-cell">{esc(fmt_day(d)) if d else "—"}</td>' if dated else "")
+            + f'<td class="total-cell">{fmt_n(amount)}</td><td>{esc(label)}</td></tr>'
             for d, label, amount in p.entries
         )
-        span = 2 if dated else 1
-        rows += (f'<tr class="grand"><td class="total-cell">{fmt_n(p.total)}</td>'
-                 f'<td colspan="{span}">Total · {esc(p.total_label) or "column C"}</td></tr>')
+        rows += ("<tr class=\"grand\">" + ('<td>Total</td>' if dated else "")
+                 + f'<td class="total-cell">{fmt_n(p.total)}</td><td>{"Total · " if not dated else ""}{esc(p.total_label) or "column C"}</td></tr>')
         date_th = "<th>Date</th>" if dated else ""
-        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Total sales</th>{date_th}<th>Line</th></tr></thead>'
+        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr>{date_th}<th>Total sales (֏)</th><th>Line</th></tr></thead>'
                  f'<tbody>{rows}</tbody></table></div>')
     else:
-        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Total sales</th><th>Period</th><th class="num">Checks</th></tr></thead>'
-                 f'<tbody><tr class="grand"><td class="total-cell">{fmt_n(p.total)}</td><td>{esc(dates.label(p.start, p.end))}</td>'
+        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Period</th><th>Total sales (֏)</th><th class="num">Checks</th></tr></thead>'
+                 f'<tbody><tr class="grand"><td class="date-cell">{esc(dates.label(p.start, p.end))}</td><td class="total-cell">{fmt_n(p.total)}</td>'
                  f'<td class="num">{checks}</td></tr></tbody></table></div>')
     src = f"sheet «{info.sheet}»" if info and info.sheet else "workbook"
     period_note = "" if p.period_from_sheet else " · no dates found on the sheet, so the period is the data range"
@@ -463,7 +468,7 @@ def _pay(label: str, comp: bool) -> str:
 
 def render_overall_totals(totals: pd.DataFrame, show_discount: bool, title: str = "Overall totals",
                           subtitle: str = "by payment type") -> None:
-    """Total sales (col 1) → payment type → checks → share → [discount]."""
+    """Payment type → total sales → checks → share → [discount]."""
     if totals.empty:
         return
     disc_th = '<th class="num">Discount</th>' if show_discount else ""
@@ -473,17 +478,17 @@ def render_overall_totals(totals: pd.DataFrame, show_discount: bool, title: str 
         width = int(round(float(r["share"]) * 120))
         disc_td = f'<td class="num">{fmt_disc(r["discount"])}</td>' if show_discount else ""
         rows.append(
-            f'<tr><td class="total-cell">{fmt_n(r["sales"])}</td><td>{_pay(r["payment_type"], comp)}</td>'
+            f'<tr><td>{_pay(r["payment_type"], comp)}</td><td class="total-cell">{fmt_n(r["sales"])}</td>'
             f'<td class="num">{fmt_n(r["checks"])}</td>'
             f'<td class="num"><span class="share-bar" style="width:{width}px"></span>{fmt_pct(r["share"])}</td>{disc_td}</tr>'
         )
     t_checks, t_sales, t_disc = totals["checks"].sum(), totals["sales"].sum(), totals["discount"].sum()
     disc_tot = f'<td class="num">{fmt_n(t_disc)}</td>' if show_discount else ""
-    rows.append(f'<tr class="grand"><td class="total-cell">{fmt_n(t_sales)}</td><td>Total</td>'
+    rows.append(f'<tr class="grand"><td>Total</td><td class="total-cell">{fmt_n(t_sales)}</td>'
                 f'<td class="num">{fmt_n(t_checks)}</td><td class="num">100%</td>{disc_tot}</tr>')
     st.html(
         f'<div class="card"><div class="card-title">{esc(title)}<span class="muted">{esc(subtitle)} · {config.CURRENCY}</span></div>'
-        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Total sales</th><th>Payment type</th><th class="num">Checks</th>'
+        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Payment type</th><th>Total sales (֏)</th><th class="num">Checks</th>'
         f'<th class="num">Share</th>{disc_th}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
     )
 
@@ -507,7 +512,7 @@ def render_grand_totals(k: dict, periods: list[PeriodSummary]) -> str:
 
 def render_daily_table(pivot: pd.DataFrame, pay_cols: list[str], show_discount: bool, k: dict,
                        periods: list[PeriodSummary]) -> None:
-    """One row per day: TOTAL SALES (col 1) → DATE → BANK CARDS → CASH → BANK TRANSFERS / INVOICES → CHECKS."""
+    """One row per day: DATE → TOTAL SALES (֏) → BANK CARDS → CASH → BANK TRANSFERS / INVOICES → CHECKS."""
     if pivot.empty:
         return
     pay_th = "".join(f'<th class="num">{esc(c)}</th>' for c in pay_cols)
@@ -517,25 +522,24 @@ def render_daily_table(pivot: pd.DataFrame, pay_cols: list[str], show_discount: 
         d = r["date"]
         pay_td = "".join(f'<td class="num">{fmt_n(r[c]) if c in r and r[c] else "—"}</td>' for c in pay_cols)
         disc_td = f'<td class="num">{fmt_disc(r["discount"])}</td>' if show_discount else ""
-        rows.append(f'<tr><td class="total-cell">{fmt_n(r["sales"])}</td>'
-                    f'<td class="date-cell">{esc(fmt_day(d))}<small>{d.strftime("%d.%m.%Y")}</small></td>{pay_td}'
-                    f'<td class="num">{fmt_n(r["checks"])}</td>{disc_td}</tr>')
+        rows.append(f'<tr><td class="date-cell">{esc(fmt_day(d))}</td><td class="total-cell">{fmt_n(r["sales"])}</td>'
+                    f'{pay_td}<td class="num">{fmt_n(r["checks"])}</td>{disc_td}</tr>')
     pay_tot = "".join(f'<td class="num">{fmt_n(pivot[c].sum()) if c in pivot and pivot[c].sum() else "—"}</td>' for c in pay_cols)
     disc_tot = f'<td class="num">{fmt_n(pivot["discount"].sum())}</td>' if show_discount else ""
     label = "Period total" if not periods else "Daily sections total"
-    rows.append(f'<tr class="grand"><td class="total-cell">{fmt_n(pivot["sales"].sum())}</td>'
-                f'<td>{label} · {len(pivot)} day{"s" if len(pivot) != 1 else ""}</td>{pay_tot}'
+    rows.append(f'<tr class="grand"><td>{label} · {len(pivot)} day{"s" if len(pivot) != 1 else ""}</td>'
+                f'<td class="total-cell">{fmt_n(pivot["sales"].sum())}</td>{pay_tot}'
                 f'<td class="num">{fmt_n(pivot["checks"].sum())}</td>{disc_tot}</tr>')
     st.html(
         f'<div class="card"><div class="card-title">Day-by-day breakdown<span class="muted">sales per payment type · {config.CURRENCY}</span></div>'
         f'{render_grand_totals(k, periods)}'
-        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Total sales</th><th>Date</th>{pay_th}'
+        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Date</th><th>Total sales (֏)</th>{pay_th}'
         f'<th class="num">Checks</th>{disc_th}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
     )
 
 
 def render_section_table(sections: pd.DataFrame, show_discount: bool, title: str = "Sales by section") -> None:
-    """Total sales (col 1) → section → checks → AOV → share → [discount]."""
+    """Section → total sales → checks → AOV → share → [discount]."""
     if sections.empty:
         return
     disc_th = '<th class="num">Discount</th>' if show_discount else ""
@@ -552,8 +556,8 @@ def render_section_table(sections: pd.DataFrame, show_discount: bool, title: str
         checks = fmt_n(r["checks"]) if pd.notna(r["checks"]) and r["checks"] else "—"
         aov = fmt_n(r["aov"]) if pd.notna(r["aov"]) and r["aov"] else "—"
         rows.append(
-            f'<tr><td class="total-cell">{fmt_n(r["sales"])}</td>'
-            f'<td><span class="dot" style="background:{color}"></span>{icon} <b>{esc(r["section"])}</b>{tag}</td>'
+            f'<tr><td><span class="dot" style="background:{color}"></span>{icon} <b>{esc(r["section"])}</b>{tag}</td>'
+            f'<td class="total-cell">{fmt_n(r["sales"])}</td>'
             f'<td class="num">{checks}</td><td class="num">{aov}</td>'
             f'<td class="num"><span class="share-bar" style="width:{width}px;--accent:{color}"></span>{fmt_pct(r["share"])}</td>{disc_td}</tr>'
         )
@@ -562,11 +566,11 @@ def render_section_table(sections: pd.DataFrame, show_discount: bool, title: str
     disc_tot = f'<td class="num">{fmt_n(t_disc)}</td>' if show_discount else ""
     aov_sales = sections.loc[sections["checks"].fillna(0) > 0, "sales"].sum()
     aov = fmt_n(aov_sales / t_checks) if t_checks else "—"
-    rows.append(f'<tr class="grand"><td class="total-cell">{fmt_n(t_sales)}</td><td>All sections</td>'
+    rows.append(f'<tr class="grand"><td>All sections</td><td class="total-cell">{fmt_n(t_sales)}</td>'
                 f'<td class="num">{fmt_n(t_checks) if t_checks else "—"}</td><td class="num">{aov}</td><td class="num">100%</td>{disc_tot}</tr>')
     st.html(
         f'<div class="card"><div class="card-title">{esc(title)}<span class="muted">LOTs and event sections · {config.CURRENCY}</span></div>'
-        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Total sales</th><th>Section</th><th class="num">Checks</th>'
+        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Section</th><th>Total sales (֏)</th><th class="num">Checks</th>'
         f'<th class="num">AOV</th><th class="num">Share</th>{disc_th}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
     )
 
@@ -632,17 +636,23 @@ def _total_card_html(k: dict, n_sections: int) -> str:
 
 
 def scroll_to_top() -> None:
-    """Smooth-scroll the app to the very top (Streamlit scrolls section[data-testid=stMain], not window)."""
+    """Land the app at the very top. Streamlit scrolls section[data-testid=stMain], not the window, and it
+    keeps re-rendering for a moment after a tab switch, so the scroll is repeated for ~1.2 s."""
     components.html(
         """<script>
         (function () {
-          var doc = window.parent.document;
-          var main = doc.querySelector('section[data-testid="stMain"]') || doc.querySelector('section.main');
-          var go = function () {
-            if (main) { main.scrollTo({top: 0, behavior: 'smooth'}); }
-            window.parent.scrollTo({top: 0, behavior: 'smooth'});
-          };
-          go(); setTimeout(go, 150); setTimeout(go, 500);
+          var win = window.parent, doc = win.document;
+          function go(behavior) {
+            var targets = [doc.querySelector('section[data-testid="stMain"]'), doc.querySelector('section.main'),
+                           doc.querySelector('[data-testid="stAppViewContainer"]'), doc.scrollingElement, doc.documentElement, doc.body];
+            targets.forEach(function (el) {
+              if (!el) { return; }
+              try { el.scrollTo({top: 0, left: 0, behavior: behavior}); } catch (e) { el.scrollTop = 0; }
+            });
+            try { win.scrollTo({top: 0, behavior: behavior}); } catch (e) { win.scrollTo(0, 0); }
+          }
+          go('smooth');
+          var n = 0, t = setInterval(function () { go(++n < 3 ? 'smooth' : 'auto'); if (n >= 8) { clearInterval(t); } }, 150);
         })();
         </script>""",
         height=0,
