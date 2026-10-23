@@ -12,12 +12,14 @@ from __future__ import annotations
 import base64
 import html
 import io
+import re
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 from . import config, dates
 from .config import THEME as T
@@ -62,7 +64,11 @@ def inject_css() -> None:
     css = f"""
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-    /* ---- clean interface overrides (requested) ---- */
+    /* ---- clean interface + mobile overflow overrides (requested) ---- */
+    html, body, [data-testid="stAppViewContainer"], .main {{
+        overflow-x: hidden !important;
+        max-width: 100vw !important;
+    }}
     #MainMenu {{visibility: hidden;}}
     footer {{visibility: hidden;}}
     header {{visibility: hidden;}}
@@ -76,12 +82,17 @@ def inject_css() -> None:
     }}
     [data-testid="stAppToolbar"] {{display: none !important;}}
     .block-container {{
-        padding-top: 2rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+        padding-top: 1.5rem !important;
         padding-bottom: 5rem !important;
-        padding-left: clamp(1rem, 2.5vw, 2.5rem) !important;
-        padding-right: clamp(1rem, 2.5vw, 2.5rem) !important;
         max-width: 100% !important;
     }}
+    @media (min-width: 900px) {{
+        .block-container {{ padding-left: 2.5rem !important; padding-right: 2.5rem !important; padding-top: 2rem !important; }}
+    }}
+    [data-testid="stMain"] {{ overflow-x: hidden; }}
+    .tbl-wrap, .lg, .kpi-grid, .sec-grid {{ max-width: 100%; }}
     /* the date-picker calendar's month navigation is a header element: bring it back */
     [data-testid="stDateInputCalendar"] header,
     [data-testid="stDateInputCalendar"] header * {{visibility: visible !important;}}
@@ -122,7 +133,9 @@ def inject_css() -> None:
         display:flex; flex-direction:row; flex-wrap:wrap; gap:6px; padding:2px 2px 6px;
     }}
     .st-key-tabs [data-testid="stRadioGroup"] > div, .st-key-presets [data-testid="stRadioGroup"] > div {{ margin:0; flex:0 0 auto; }}
+    .st-key-tabs [data-testid="stRadioGroup"], .st-key-presets [data-testid="stRadioGroup"] {{ position:relative; }}
     .st-key-tabs [data-testid="stRadioOption"], .st-key-presets [data-testid="stRadioOption"] {{
+        position:relative;   /* contains the visually-hidden native input, so it cannot widen the page */
         display:flex; align-items:center; margin:0 !important; padding:9px 16px; border-radius:999px; cursor:pointer;
         border:1px solid var(--border); background:var(--surface); color:var(--ink-2); white-space:nowrap;
         box-shadow: var(--shadow); transition: background .15s, border-color .15s, color .15s, transform .15s;
@@ -138,6 +151,8 @@ def inject_css() -> None:
     .st-key-presets [data-testid="stRadioOption"][data-selected="true"] {{ background: var(--ink); border-color: var(--ink); color:#fff; }}
     .st-key-presets [data-testid="stRadioOption"][data-selected="true"] p {{ color:#fff; }}
     .st-key-tabs [data-testid="stWidgetLabel"], .st-key-presets [data-testid="stWidgetLabel"] {{ display:none; }}
+    .st-key-tabs [data-testid="stElementContainer"], .st-key-tabs [data-testid="stRadio"],
+    .st-key-presets [data-testid="stElementContainer"], .st-key-presets [data-testid="stRadio"] {{ width:100% !important; max-width:100%; min-width:0; }}
 
     /* ---- controls row ---- */
     .st-key-presets {{ min-width: 0; }}
@@ -174,6 +189,40 @@ def inject_css() -> None:
     .kpi-value {{ font-size: clamp(1.35rem, 2.2vw, 1.75rem); font-weight:800; letter-spacing:-0.02em; margin-top:6px; color: var(--ink); font-variant-numeric: tabular-nums; white-space:nowrap; }}
     .kpi-value .unit {{ font-size:.95rem; font-weight:600; color: var(--ink-3); margin-left:3px; }}
     .kpi-sub {{ font-size:.78rem; color: var(--ink-2); margin-top:6px; }}
+    /* executive hover / tap: lift with a deeper shadow, settle back over ~2s */
+    @keyframes kpi-lift {{
+        0%   {{ transform: translateY(0);    box-shadow: var(--shadow); }}
+        12%  {{ transform: translateY(-6px); box-shadow: 0 18px 32px -14px rgba(21,35,27,.32), 0 2px 4px rgba(21,35,27,.06); }}
+        55%  {{ transform: translateY(-6px); box-shadow: 0 18px 32px -14px rgba(21,35,27,.32), 0 2px 4px rgba(21,35,27,.06); }}
+        100% {{ transform: translateY(0);    box-shadow: var(--shadow); }}
+    }}
+    .kpi:hover, .kpi:active {{ animation: kpi-lift 2s cubic-bezier(.22,.8,.25,1) 1 both; }}
+    @media (prefers-reduced-motion: reduce) {{ .kpi:hover, .kpi:active {{ animation: none; }} }}
+
+    /* ---- section cards (General) — the whole card is a button ---- */
+    [class*="st-key-seccard_"] {{ position: relative; }}
+    [class*="st-key-seccard_"] [data-testid="stVerticalBlock"] {{ gap: 0; }}
+    [class*="st-key-open_"] {{ position:absolute; inset:0; z-index:2; }}
+    [class*="st-key-open_"] button {{ position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; border:0; padding:0; margin:0; }}
+    [class*="st-key-open_"] button:focus-visible {{ opacity:1; background:transparent; outline:3px solid var(--green); outline-offset:-3px; border-radius:var(--radius); }}
+    [class*="st-key-open_"] button * {{ display:none; }}
+    .sec-card {{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px 12px; position:relative; overflow:hidden; min-height:138px; transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }}
+    .sec-card:before {{ content:""; position:absolute; left:0; right:0; top:0; height:4px; background: var(--accent); }}
+    [class*="st-key-seccard_"]:hover .sec-card {{ transform: translateY(-3px); box-shadow: 0 16px 28px -14px rgba(21,35,27,.3); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }}
+    .sec-card-head {{ display:flex; align-items:center; gap:10px; }}
+    .sec-card-icon {{ width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.1rem; background: color-mix(in srgb, var(--accent) 12%, white); flex:0 0 auto; }}
+    .sec-card-name {{ font-weight:800; font-size:.95rem; line-height:1.2; letter-spacing:-0.005em; }}
+    .sec-card-kind {{ font-size:.68rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color: var(--ink-3); margin-top:2px; }}
+    .sec-card-value {{ font-size:1.35rem; font-weight:800; letter-spacing:-0.02em; margin-top:10px; font-variant-numeric: tabular-nums; white-space:nowrap; }}
+    .sec-card-value .unit {{ font-size:.85rem; font-weight:600; color:var(--ink-3); margin-left:3px; }}
+    .sec-card-meta {{ display:flex; gap:14px; flex-wrap:wrap; font-size:.76rem; color: var(--ink-2); margin-top:6px; }}
+    .sec-card-meta b {{ color: var(--ink); font-variant-numeric: tabular-nums; }}
+    .sec-card-share {{ margin-top:10px; height:6px; border-radius:3px; background:#EEF1EC; overflow:hidden; }}
+    .sec-card-share span {{ display:block; height:100%; background: var(--accent); border-radius:3px; }}
+    .sec-card-open {{ position:absolute; right:14px; top:14px; font-size:.72rem; font-weight:700; color: var(--ink-3); opacity:0; transition: opacity .2s; }}
+    [class*="st-key-seccard_"]:hover .sec-card-open {{ opacity:1; }}
+    .sec-card.total {{ background: var(--green-soft); border-color:#CFE3D5; }}
+    .sec-card.total .sec-card-value {{ color: var(--green-dark); }}
 
     /* ---- cards & tables ---- */
     .card {{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px 10px; margin-top:8px; }}
@@ -274,7 +323,7 @@ def render_header(ds: Dataset) -> None:
 def render_tabs() -> str:
     labels = [s.label for s in config.SECTIONS]
     with st.container(key="tabs"):
-        choice = st.radio("Section", labels, horizontal=True, label_visibility="collapsed", key="section")
+        choice = st.radio("Section", labels, horizontal=True, label_visibility="collapsed", key="section", width="stretch")
     return config.SECTIONS[labels.index(choice)].key
 
 
@@ -284,7 +333,7 @@ def render_date_controls(ds: Dataset) -> tuple[date, date]:
     left, right = st.columns([5, 1.6], vertical_alignment="center")
     with left:
         with st.container(key="presets"):
-            st.radio("Period", config.PRESETS, horizontal=True, label_visibility="collapsed", key="preset")
+            st.radio("Period", config.PRESETS, horizontal=True, label_visibility="collapsed", key="preset", width="stretch")
         preset = st.session_state["preset"]
         if preset == config.PRESET_CUSTOM:
             c1, c2 = st.columns(2)
@@ -313,7 +362,7 @@ def render_section_head(section: config.Section, info: SectionInfo | None, ds: D
         badge = '<span class="badge badge-missing">Sheet missing</span>'
     elif info.source == "period":
         p = ds.periods[section.key]
-        meta = f"Period total from sheet «{info.sheet}» · {dates.label(p.start, p.end)}"
+        meta = f"Period-summary sheet «{info.sheet}» · {dates.label(p.start, p.end)}"
         badge = '<span class="badge badge-period">Period total</span>'
     else:
         meta = f"Live · workbook sheet «{info.sheet}» · {info.rows} rows parsed"
@@ -379,12 +428,16 @@ def render_period_card(p: PeriodSummary, info: SectionInfo | None) -> None:
     checks = fmt_n(p.checks) if p.checks else "—"
     rows = ""
     if p.entries:
+        dated = any(d for d, _, _ in p.entries)
         rows = "".join(
-            f'<tr><td class="dim">{esc(fmt_day(d)) if d else "—"}</td><td>{esc(label)}</td><td class="num">{fmt_n(amount)}</td></tr>'
+            "<tr>" + (f'<td class="dim">{esc(fmt_day(d)) if d else "—"}</td>' if dated else "")
+            + f'<td>{esc(label)}</td><td class="num">{fmt_n(amount)}</td></tr>'
             for d, label, amount in p.entries
         )
-        rows += f'<tr class="grand"><td colspan="2">Total · {esc(p.total_label) or "column C"}</td><td class="num">{fmt_n(p.total)}</td></tr>'
-        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Date</th><th>Line</th><th class="num">Amount</th></tr></thead>'
+        span = 2 if dated else 1
+        rows += f'<tr class="grand"><td colspan="{span}">Total · {esc(p.total_label) or "column C"}</td><td class="num">{fmt_n(p.total)}</td></tr>'
+        date_th = "<th>Date</th>" if dated else ""
+        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr>{date_th}<th>Line</th><th class="num">Amount</th></tr></thead>'
                  f'<tbody>{rows}</tbody></table></div>')
     else:
         table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Period</th><th class="num">Checks</th><th class="num">Total</th></tr></thead>'
@@ -509,6 +562,84 @@ def render_section_table(sections: pd.DataFrame, show_discount: bool, title: str
     )
 
 
+# ----------------------------------------------------------------------------- section cards (General)
+def render_section_cards(sections: pd.DataFrame, k: dict, on_pick, per_row: int = 3) -> None:
+    """One clickable card per section (+ a grand-total tile). Clicking opens that section's tab."""
+    if sections.empty:
+        return
+    st.html('<div class="card-title" style="margin:14px 0 2px">Sales by section'
+            '<span class="muted">click a card to open its tab</span></div>')
+    rows = list(sections.itertuples(index=False))
+    cards = [("section", r) for r in rows] + [("total", None)]
+    for start_i in range(0, len(cards), per_row):
+        cols = st.columns(per_row)
+        for j, (kind, r) in enumerate(cards[start_i:start_i + per_row]):
+            i = start_i + j
+            with cols[j], st.container(key=f"seccard_{i}"):
+                if kind == "total":
+                    st.html(_total_card_html(k, len(rows)))
+                    st.button("Back to top", key=f"open_{i}", on_click=on_pick, args=(None,))
+                else:
+                    st.html(_section_card_html(r))
+                    st.button(f"Open {r.section}", key=f"open_{i}", on_click=on_pick, args=(r.section,))
+
+
+def _section_card_html(r) -> str:
+    sec = config.SECTION_BY_KEY.get(r.section)
+    icon = sec.icon if sec else "▪"
+    color = config.CHART_COLORS.get(r.section, T["ink_3"])
+    if r.kind == "period" and r.period:
+        kind = f"Period total · {esc(dates.label(*r.period))}"
+    else:
+        kind = "Daily sales"
+    checks = fmt_n(r.checks) if pd.notna(r.checks) and r.checks else "—"
+    aov = fmt_n(r.aov) if pd.notna(r.aov) and r.aov else "—"
+    disc = f'<span>Discount <b>{fmt_n(r.discount)}</b></span>' if r.discount else ""
+    pct = max(0.0, min(100.0, float(r.share) * 100))
+    return (
+        f'<div class="sec-card" style="--accent:{color}">'
+        f'<div class="sec-card-head"><div class="sec-card-icon">{icon}</div>'
+        f'<div><div class="sec-card-name">{esc(r.section)}</div><div class="sec-card-kind">{kind}</div></div></div>'
+        f'<div class="sec-card-open">Open ↗</div>'
+        f'<div class="sec-card-value">{fmt_n(r.sales)}<span class="unit">{config.CURRENCY}</span></div>'
+        f'<div class="sec-card-meta"><span>Checks <b>{checks}</b></span><span>AOV <b>{aov}</b></span>'
+        f'<span>Share <b>{fmt_pct(r.share)}</b></span>{disc}</div>'
+        f'<div class="sec-card-share"><span style="width:{pct:.1f}%"></span></div></div>'
+    )
+
+
+def _total_card_html(k: dict, n_sections: int) -> str:
+    checks = fmt_n(k["checks"]) if k["checks"] else "—"
+    aov = fmt_n(k["aov"]) if k["checks"] else "—"
+    return (
+        f'<div class="sec-card total" style="--accent:{T["green"]}">'
+        f'<div class="sec-card-head"><div class="sec-card-icon">Σ</div>'
+        f'<div><div class="sec-card-name">All sections</div><div class="sec-card-kind">{n_sections} sections · grand total</div></div></div>'
+        f'<div class="sec-card-value">{fmt_n(k["sales"])}<span class="unit">{config.CURRENCY}</span></div>'
+        f'<div class="sec-card-meta"><span>Checks <b>{checks}</b></span><span>AOV <b>{aov}</b></span>'
+        f'<span>Share <b>100%</b></span></div>'
+        f'<div class="sec-card-share"><span style="width:100%"></span></div></div>'
+    )
+
+
+def scroll_to_top() -> None:
+    """Smooth-scroll the app to the very top (Streamlit scrolls section[data-testid=stMain], not window)."""
+    components.html(
+        """<script>
+        (function () {
+          var doc = window.parent.document;
+          var main = doc.querySelector('section[data-testid="stMain"]') || doc.querySelector('section.main');
+          var go = function () {
+            if (main) { main.scrollTo({top: 0, behavior: 'smooth'}); }
+            window.parent.scrollTo({top: 0, behavior: 'smooth'});
+          };
+          go(); setTimeout(go, 150); setTimeout(go, 500);
+        })();
+        </script>""",
+        height=0,
+    )
+
+
 # ----------------------------------------------------------------------------- charts
 _PLOT_FONT = dict(family="Inter, -apple-system, Segoe UI, Roboto, sans-serif", color=T["ink"], size=12)
 
@@ -586,6 +717,7 @@ def render_raw(records: pd.DataFrame, section_key: str, start: date, end: date) 
                                     "Payment": st.column_config.TextColumn(help="Bank Cards = POS Arcus + Банковские карты · Cash = Наличные"),
                                     "Сумма со скидкой": st.column_config.NumberColumn(format="%d"),
                                     "Сумма скидки": st.column_config.NumberColumn(format="%d")})
-        fname = f"cop17_{section_key.replace(' ', '_').replace(',', '')}_{start:%Y%m%d}-{end:%Y%m%d}.csv"
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", section_key).strip("_").lower() or "section"
+        fname = f"cop17_{slug}_{start:%Y%m%d}-{end:%Y%m%d}.csv"
         st.download_button("Download CSV", data=lambda: records.to_csv(index=False).encode("utf-8-sig"),
                            file_name=fname, mime="text/csv", on_click="ignore", key="dl_csv")
