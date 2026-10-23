@@ -83,9 +83,9 @@ def inject_css() -> None:
     }}
     [data-testid="stAppToolbar"] {{display: none !important;}}
     .block-container {{
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
-        padding-top: 1.5rem !important;
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+        padding-top: 1rem !important;
         padding-bottom: 5rem !important;
         max-width: 100% !important;
     }}
@@ -157,7 +157,10 @@ def inject_css() -> None:
 
     /* ---- controls row ---- */
     .st-key-presets {{ min-width: 0; }}
+    .range-wrap {{ text-align:right; }}
     .range-chip {{ display:inline-flex; align-items:center; gap:8px; padding:7px 12px; border-radius:10px; background:var(--green-soft); color:var(--green-dark); font-weight:600; font-size:.84rem; white-space:nowrap; }}
+    .st-key-refresh {{ margin: 2px 0 6px; }}
+    @media (max-width: 640px) {{ .range-wrap {{ text-align:left; }} }}
     .st-key-refresh button, .st-key-show_full button {{ border-radius:10px; border:1px solid var(--border); background:var(--surface); color:var(--ink-2); font-weight:600; box-shadow:var(--shadow); }}
     .st-key-refresh button:hover, .st-key-show_full button:hover {{ border-color: var(--green); color: var(--green-dark); }}
     [data-testid="stDateInput"] label p {{ font-size:.78rem; color:var(--ink-3); font-weight:600; letter-spacing:.02em; text-transform:uppercase; }}
@@ -197,8 +200,8 @@ def inject_css() -> None:
         55%  {{ transform: translateY(-6px); box-shadow: 0 18px 32px -14px rgba(21,35,27,.32), 0 2px 4px rgba(21,35,27,.06); }}
         100% {{ transform: translateY(0);    box-shadow: var(--shadow); }}
     }}
-    .kpi:hover, .kpi:active {{ animation: kpi-lift 2s cubic-bezier(.22,.8,.25,1) 1 both; }}
-    @media (prefers-reduced-motion: reduce) {{ .kpi:hover, .kpi:active {{ animation: none; }} }}
+    @media (hover: hover) and (pointer: fine) {{ .kpi:hover {{ animation: kpi-lift 2s cubic-bezier(.22,.8,.25,1) 1 both; }} }}
+    @media (prefers-reduced-motion: reduce) {{ .kpi:hover {{ animation: none; }} }}
 
     /* ---- section cards (General) — the whole card is a button ---- */
     [class*="st-key-seccard_"] {{ position: relative; }}
@@ -207,9 +210,13 @@ def inject_css() -> None:
     [class*="st-key-open_"] button {{ position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; border:0; padding:0; margin:0; touch-action:manipulation; -webkit-tap-highlight-color: transparent; }}
     [class*="st-key-open_"] button:focus-visible {{ opacity:1; background:transparent; outline:3px solid var(--green); outline-offset:-3px; border-radius:var(--radius); }}
     [class*="st-key-open_"] button * {{ display:none; }}
-    .sec-card {{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px 12px; position:relative; overflow:hidden; min-height:138px; transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; pointer-events:none; }}
+    /* cards never move or float — a tap must map 1:1 onto the button underneath; mouse users get a border hint */
+    .sec-card {{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px 12px; position:relative; overflow:hidden; min-height:138px; pointer-events:none; }}
     .sec-card:before {{ content:""; position:absolute; left:0; right:0; top:0; height:4px; background: var(--accent); }}
-    [class*="st-key-seccard_"]:hover .sec-card {{ transform: translateY(-3px); box-shadow: 0 16px 28px -14px rgba(21,35,27,.3); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }}
+    @media (hover: hover) and (pointer: fine) {{
+        [class*="st-key-seccard_"]:hover .sec-card {{ border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }}
+    }}
+    [class*="st-key-open_"] button:active + * .sec-card, [class*="st-key-seccard_"]:has(button:active) .sec-card {{ background: #F8FAF7; }}
     .sec-card-head {{ display:flex; align-items:center; gap:10px; }}
     .sec-card-icon {{ width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.1rem; background: color-mix(in srgb, var(--accent) 12%, white); flex:0 0 auto; }}
     .sec-card-name {{ font-weight:800; font-size:.95rem; line-height:1.2; letter-spacing:-0.005em; }}
@@ -220,8 +227,7 @@ def inject_css() -> None:
     .sec-card-meta b {{ color: var(--ink); font-variant-numeric: tabular-nums; }}
     .sec-card-share {{ margin-top:10px; height:6px; border-radius:3px; background:#EEF1EC; overflow:hidden; }}
     .sec-card-share span {{ display:block; height:100%; background: var(--accent); border-radius:3px; }}
-    .sec-card-open {{ position:absolute; right:14px; top:14px; font-size:.72rem; font-weight:700; color: var(--ink-3); opacity:0; transition: opacity .2s; }}
-    [class*="st-key-seccard_"]:hover .sec-card-open {{ opacity:1; }}
+    .sec-card-open {{ position:absolute; right:14px; top:14px; font-size:.72rem; font-weight:700; color: var(--ink-3); opacity:.75; }}
     .sec-card.total {{ background: var(--green-soft); border-color:#CFE3D5; }}
     .sec-card.total .sec-card-value {{ color: var(--green-dark); }}
 
@@ -262,7 +268,7 @@ def inject_css() -> None:
 
     /* ---- phones ---- */
     @media (max-width: 640px) {{
-        .block-container {{ padding-top: 1.25rem !important; }}
+        .block-container {{ padding-top: 1rem !important; }}
         .st-key-tabs [data-testid="stRadioGroup"], .st-key-presets [data-testid="stRadioGroup"] {{
             flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; padding-bottom:10px; scrollbar-width:thin; -webkit-overflow-scrolling:touch;
         }}
@@ -339,6 +345,7 @@ def render_tabs() -> str:
 
 
 def render_date_controls(ds: Dataset) -> tuple[date, date]:
+    """Period presets + the selected-range pill (row 1), custom pickers (row 2) — the top of the control block."""
     dmin, dmax = ds.dmin, ds.dmax
     dates.init_state(dmin, dmax)
     left, right = st.columns([5, 1.6], vertical_alignment="center")
@@ -355,9 +362,16 @@ def render_date_controls(ds: Dataset) -> tuple[date, date]:
     start, end = dates.resolve(preset, dmin, dmax)
     with right:
         n_days = (end - start).days + 1
-        st.html(f'<div style="text-align:right"><span class="range-chip">📅 {esc(dates.label(start, end))}'
+        st.html(f'<div class="range-wrap"><span class="range-chip">📅 {esc(dates.label(start, end))}'
                 f' <span style="opacity:.7">· {n_days} day{"s" if n_days != 1 else ""}</span></span></div>')
     return start, end
+
+
+def render_refresh_button() -> bool:
+    """The ↻ Refresh data button, right under the date controls. Returns True when clicked."""
+    _, right = st.columns([5, 1.6])
+    with right:
+        return st.button("↻ Refresh data", key="refresh", width="stretch")
 
 
 # ----------------------------------------------------------------------------- section header & KPIs
