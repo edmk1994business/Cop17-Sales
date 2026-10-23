@@ -117,8 +117,8 @@ def inject_css() -> None:
     [data-testid="stVerticalBlock"] {{ gap: 0.6rem; }}
 
     /* ---- header ---- */
-    .cop-head {{ display:flex; align-items:center; gap:18px; flex-wrap:wrap; }}
-    .cop-logo {{ height:64px; width:auto; border-radius:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; object-fit:contain; }}
+    .cop-head {{ display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin: 2px 0 6px; }}
+    .cop-logo {{ width:200px; max-width:100%; height:auto; border-radius:14px; border:1px solid var(--border); background:#fff; padding:10px 14px; object-fit:contain; box-shadow: var(--shadow); image-rendering: -webkit-optimize-contrast; }}
     .cop-title {{ font-size: clamp(1.35rem, 2.4vw, 1.9rem); font-weight:800; letter-spacing:-0.02em; line-height:1.1; color:var(--ink); }}
     .cop-sub {{ color: var(--ink-2); font-size:.92rem; margin-top:4px; }}
     .cop-status {{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }}
@@ -235,12 +235,15 @@ def inject_css() -> None:
     table.dt tr:last-child td {{ border-bottom:none; }}
     table.dt .num {{ text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap; }}
     table.dt .dim {{ color: var(--ink-2); }}
-    table.dt .date-cell {{ font-weight:700; white-space:nowrap; vertical-align:top; color:var(--ink); border-right:1px solid #EEF1EC; width:1%; }}
+    table.dt .date-cell {{ font-weight:700; white-space:nowrap; vertical-align:middle; color:var(--ink); width:1%; }}
+    table.dt .total-cell {{ font-weight:800; font-size:.95rem; white-space:nowrap; font-variant-numeric: tabular-nums; color:var(--ink); border-right:1px solid #EEF1EC; width:1%; padding-right:18px; }}
+    table.dt thead th:first-child {{ color: var(--ink); }}
+    table.dt tr.grand .total-cell {{ color: var(--green-dark); font-size:1rem; }}
     table.dt .date-cell small {{ display:block; font-weight:500; color:var(--ink-3); font-size:.74rem; margin-top:2px; }}
     table.dt tr.total td {{ font-weight:800; background: #F3F6F2; border-top:1px solid var(--border); }}
     table.dt tr.day-total td {{ font-weight:700; background: #F8FAF7; color: var(--ink); }}
     table.dt tr.grand td {{ font-weight:800; background: var(--green-soft); color: var(--green-dark); border-top:2px solid var(--green); }}
-    table.dt tr.grand td:first-child {{ white-space:nowrap; }}
+    table.dt tr.grand td {{ white-space:nowrap; }}
     .share-bar {{ display:inline-block; height:6px; border-radius:3px; background: var(--accent, var(--green)); vertical-align:middle; margin-right:8px; }}
     .pay-pill {{ display:inline-block; padding:3px 9px; border-radius:999px; font-size:.78rem; font-weight:600; background:#F3F4F6; color:#4B5563; white-space:nowrap; }}
     .pay-pill.comp {{ background:#FBE9E5; color:#8A2E1E; }}
@@ -262,7 +265,8 @@ def inject_css() -> None:
         .st-key-tabs [data-testid="stRadioGroup"], .st-key-presets [data-testid="stRadioGroup"] {{
             flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; padding-bottom:10px; scrollbar-width:thin; -webkit-overflow-scrolling:touch;
         }}
-        .cop-logo {{ height:48px; }}
+        .cop-logo {{ width:160px; padding:8px 10px; }}
+        .cop-head {{ gap:14px; }}
         .kpi-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap:8px; }}
         .kpi {{ padding:12px 12px 10px 16px; }}
         .kpi-value {{ font-size:1.2rem; white-space:normal; }}
@@ -276,7 +280,7 @@ def inject_css() -> None:
 
 # ----------------------------------------------------------------------------- header
 @st.cache_data(show_spinner=False)
-def _logo_data_uri(name: str = "cop17.jpg", width: int = 420) -> str | None:
+def _logo_data_uri(name: str = "cop17.jpg", width: int = 640) -> str | None:
     path = ASSETS / name
     if not path.exists():
         return None
@@ -287,7 +291,7 @@ def _logo_data_uri(name: str = "cop17.jpg", width: int = 420) -> str | None:
         ratio = width / img.width
         img = img.resize((width, max(1, int(img.height * ratio))))
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=85, optimize=True)
+        img.save(buf, format="JPEG", quality=90, optimize=True)
         data = buf.getvalue()
     except Exception:  # noqa: BLE001 — fall back to the raw bytes
         data = path.read_bytes()
@@ -424,25 +428,26 @@ def render_excluded_note(excluded: list[PeriodSummary]) -> None:
 
 
 def render_period_card(p: PeriodSummary, info: SectionInfo | None) -> None:
-    """The column-C summary of a period sheet: period, total, check count and any dated lines found."""
+    """The column-C summary of a period sheet: total first, then period / lines, checks."""
     checks = fmt_n(p.checks) if p.checks else "—"
-    rows = ""
     if p.entries:
         dated = any(d for d, _, _ in p.entries)
         rows = "".join(
-            "<tr>" + (f'<td class="dim">{esc(fmt_day(d)) if d else "—"}</td>' if dated else "")
-            + f'<td>{esc(label)}</td><td class="num">{fmt_n(amount)}</td></tr>'
+            f'<tr><td class="total-cell">{fmt_n(amount)}</td>'
+            + (f'<td class="dim">{esc(fmt_day(d)) if d else "—"}</td>' if dated else "")
+            + f'<td>{esc(label)}</td></tr>'
             for d, label, amount in p.entries
         )
         span = 2 if dated else 1
-        rows += f'<tr class="grand"><td colspan="{span}">Total · {esc(p.total_label) or "column C"}</td><td class="num">{fmt_n(p.total)}</td></tr>'
+        rows += (f'<tr class="grand"><td class="total-cell">{fmt_n(p.total)}</td>'
+                 f'<td colspan="{span}">Total · {esc(p.total_label) or "column C"}</td></tr>')
         date_th = "<th>Date</th>" if dated else ""
-        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr>{date_th}<th>Line</th><th class="num">Amount</th></tr></thead>'
+        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Total sales</th>{date_th}<th>Line</th></tr></thead>'
                  f'<tbody>{rows}</tbody></table></div>')
     else:
-        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Period</th><th class="num">Checks</th><th class="num">Total</th></tr></thead>'
-                 f'<tbody><tr class="grand"><td>{esc(dates.label(p.start, p.end))}</td><td class="num">{checks}</td>'
-                 f'<td class="num">{fmt_n(p.total)}</td></tr></tbody></table></div>')
+        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Total sales</th><th>Period</th><th class="num">Checks</th></tr></thead>'
+                 f'<tbody><tr class="grand"><td class="total-cell">{fmt_n(p.total)}</td><td>{esc(dates.label(p.start, p.end))}</td>'
+                 f'<td class="num">{checks}</td></tr></tbody></table></div>')
     src = f"sheet «{info.sheet}»" if info and info.sheet else "workbook"
     period_note = "" if p.period_from_sheet else " · no dates found on the sheet, so the period is the data range"
     st.html(
@@ -458,6 +463,7 @@ def _pay(label: str, comp: bool) -> str:
 
 def render_overall_totals(totals: pd.DataFrame, show_discount: bool, title: str = "Overall totals",
                           subtitle: str = "by payment type") -> None:
+    """Total sales (col 1) → payment type → checks → share → [discount]."""
     if totals.empty:
         return
     disc_th = '<th class="num">Discount</th>' if show_discount else ""
@@ -467,18 +473,18 @@ def render_overall_totals(totals: pd.DataFrame, show_discount: bool, title: str 
         width = int(round(float(r["share"]) * 120))
         disc_td = f'<td class="num">{fmt_disc(r["discount"])}</td>' if show_discount else ""
         rows.append(
-            f'<tr><td>{_pay(r["payment_type"], comp)}</td><td class="num">{fmt_n(r["checks"])}</td>'
-            f'<td class="num">{fmt_n(r["sales"])}</td>{disc_td}'
-            f'<td class="num"><span class="share-bar" style="width:{width}px"></span>{fmt_pct(r["share"])}</td></tr>'
+            f'<tr><td class="total-cell">{fmt_n(r["sales"])}</td><td>{_pay(r["payment_type"], comp)}</td>'
+            f'<td class="num">{fmt_n(r["checks"])}</td>'
+            f'<td class="num"><span class="share-bar" style="width:{width}px"></span>{fmt_pct(r["share"])}</td>{disc_td}</tr>'
         )
     t_checks, t_sales, t_disc = totals["checks"].sum(), totals["sales"].sum(), totals["discount"].sum()
     disc_tot = f'<td class="num">{fmt_n(t_disc)}</td>' if show_discount else ""
-    rows.append(f'<tr class="grand"><td>Total</td><td class="num">{fmt_n(t_checks)}</td>'
-                f'<td class="num">{fmt_n(t_sales)}</td>{disc_tot}<td class="num">100%</td></tr>')
+    rows.append(f'<tr class="grand"><td class="total-cell">{fmt_n(t_sales)}</td><td>Total</td>'
+                f'<td class="num">{fmt_n(t_checks)}</td><td class="num">100%</td>{disc_tot}</tr>')
     st.html(
         f'<div class="card"><div class="card-title">{esc(title)}<span class="muted">{esc(subtitle)} · {config.CURRENCY}</span></div>'
-        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Payment type</th><th class="num">Checks</th>'
-        f'<th class="num">Sales</th>{disc_th}<th class="num">Share</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
+        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Total sales</th><th>Payment type</th><th class="num">Checks</th>'
+        f'<th class="num">Share</th>{disc_th}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
     )
 
 
@@ -501,7 +507,7 @@ def render_grand_totals(k: dict, periods: list[PeriodSummary]) -> str:
 
 def render_daily_table(pivot: pd.DataFrame, pay_cols: list[str], show_discount: bool, k: dict,
                        periods: list[PeriodSummary]) -> None:
-    """One row per day with consolidated payment columns (Bank Cards, Cash, …), checks and total."""
+    """One row per day: TOTAL SALES (col 1) → DATE → BANK CARDS → CASH → BANK TRANSFERS / INVOICES → CHECKS."""
     if pivot.empty:
         return
     pay_th = "".join(f'<th class="num">{esc(c)}</th>' for c in pay_cols)
@@ -509,24 +515,27 @@ def render_daily_table(pivot: pd.DataFrame, pay_cols: list[str], show_discount: 
     rows = []
     for _, r in pivot.iterrows():
         d = r["date"]
-        pay_td = "".join(f'<td class="num">{fmt_n(r[c]) if r[c] else "—"}</td>' for c in pay_cols)
+        pay_td = "".join(f'<td class="num">{fmt_n(r[c]) if c in r and r[c] else "—"}</td>' for c in pay_cols)
         disc_td = f'<td class="num">{fmt_disc(r["discount"])}</td>' if show_discount else ""
-        rows.append(f'<tr><td class="date-cell">{esc(fmt_day(d))}<small>{d.strftime("%d.%m.%Y")}</small></td>{pay_td}'
-                    f'<td class="num">{fmt_n(r["checks"])}</td><td class="num"><b>{fmt_n(r["sales"])}</b></td>{disc_td}</tr>')
-    pay_tot = "".join(f'<td class="num">{fmt_n(pivot[c].sum())}</td>' for c in pay_cols)
+        rows.append(f'<tr><td class="total-cell">{fmt_n(r["sales"])}</td>'
+                    f'<td class="date-cell">{esc(fmt_day(d))}<small>{d.strftime("%d.%m.%Y")}</small></td>{pay_td}'
+                    f'<td class="num">{fmt_n(r["checks"])}</td>{disc_td}</tr>')
+    pay_tot = "".join(f'<td class="num">{fmt_n(pivot[c].sum()) if c in pivot and pivot[c].sum() else "—"}</td>' for c in pay_cols)
     disc_tot = f'<td class="num">{fmt_n(pivot["discount"].sum())}</td>' if show_discount else ""
     label = "Period total" if not periods else "Daily sections total"
-    rows.append(f'<tr class="grand"><td>{label} · {len(pivot)} day{"s" if len(pivot) != 1 else ""}</td>{pay_tot}'
-                f'<td class="num">{fmt_n(pivot["checks"].sum())}</td><td class="num">{fmt_n(pivot["sales"].sum())}</td>{disc_tot}</tr>')
+    rows.append(f'<tr class="grand"><td class="total-cell">{fmt_n(pivot["sales"].sum())}</td>'
+                f'<td>{label} · {len(pivot)} day{"s" if len(pivot) != 1 else ""}</td>{pay_tot}'
+                f'<td class="num">{fmt_n(pivot["checks"].sum())}</td>{disc_tot}</tr>')
     st.html(
         f'<div class="card"><div class="card-title">Day-by-day breakdown<span class="muted">sales per payment type · {config.CURRENCY}</span></div>'
         f'{render_grand_totals(k, periods)}'
-        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Date</th>{pay_th}<th class="num">Checks</th>'
-        f'<th class="num">Total sales</th>{disc_th}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
+        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Total sales</th><th>Date</th>{pay_th}'
+        f'<th class="num">Checks</th>{disc_th}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
     )
 
 
 def render_section_table(sections: pd.DataFrame, show_discount: bool, title: str = "Sales by section") -> None:
+    """Total sales (col 1) → section → checks → AOV → share → [discount]."""
     if sections.empty:
         return
     disc_th = '<th class="num">Discount</th>' if show_discount else ""
@@ -543,22 +552,22 @@ def render_section_table(sections: pd.DataFrame, show_discount: bool, title: str
         checks = fmt_n(r["checks"]) if pd.notna(r["checks"]) and r["checks"] else "—"
         aov = fmt_n(r["aov"]) if pd.notna(r["aov"]) and r["aov"] else "—"
         rows.append(
-            f'<tr><td><span class="dot" style="background:{color}"></span>{icon} <b>{esc(r["section"])}</b>{tag}</td>'
-            f'<td class="num">{checks}</td><td class="num">{fmt_n(r["sales"])}</td>{disc_td}'
-            f'<td class="num">{aov}</td>'
-            f'<td class="num"><span class="share-bar" style="width:{width}px;--accent:{color}"></span>{fmt_pct(r["share"])}</td></tr>'
+            f'<tr><td class="total-cell">{fmt_n(r["sales"])}</td>'
+            f'<td><span class="dot" style="background:{color}"></span>{icon} <b>{esc(r["section"])}</b>{tag}</td>'
+            f'<td class="num">{checks}</td><td class="num">{aov}</td>'
+            f'<td class="num"><span class="share-bar" style="width:{width}px;--accent:{color}"></span>{fmt_pct(r["share"])}</td>{disc_td}</tr>'
         )
     t_checks = sections["checks"].fillna(0).sum()
     t_sales, t_disc = sections["sales"].sum(), sections["discount"].sum()
     disc_tot = f'<td class="num">{fmt_n(t_disc)}</td>' if show_discount else ""
     aov_sales = sections.loc[sections["checks"].fillna(0) > 0, "sales"].sum()
     aov = fmt_n(aov_sales / t_checks) if t_checks else "—"
-    rows.append(f'<tr class="grand"><td>All sections</td><td class="num">{fmt_n(t_checks) if t_checks else "—"}</td>'
-                f'<td class="num">{fmt_n(t_sales)}</td>{disc_tot}<td class="num">{aov}</td><td class="num">100%</td></tr>')
+    rows.append(f'<tr class="grand"><td class="total-cell">{fmt_n(t_sales)}</td><td>All sections</td>'
+                f'<td class="num">{fmt_n(t_checks) if t_checks else "—"}</td><td class="num">{aov}</td><td class="num">100%</td>{disc_tot}</tr>')
     st.html(
         f'<div class="card"><div class="card-title">{esc(title)}<span class="muted">LOTs and event sections · {config.CURRENCY}</span></div>'
-        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Section</th><th class="num">Checks</th><th class="num">Sales</th>{disc_th}'
-        f'<th class="num">AOV</th><th class="num">Share</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
+        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Total sales</th><th>Section</th><th class="num">Checks</th>'
+        f'<th class="num">AOV</th><th class="num">Share</th>{disc_th}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
     )
 
 
