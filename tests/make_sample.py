@@ -10,6 +10,10 @@ Sheet variants exercise different real-world quirks:
   LOT 8  – an extra outer "Торговое предприятие" column + its own "… всего" rows
   LOT 9  – datetime cells, "Заказов" instead of "Чеков", numbers as strings "12 345,00"
   LOT 10 – real discounts, plus "(без оплаты)" compliments rows
+Column-C summary sheets (one total in column C + the period written on the sheet):
+  LOT 4                          – one row: label · "19.10.2026 - 30.10.2026" · 5 400 000
+  side events, CBD, Ֆուրշետներ    – dated entry rows + an "Ընդամենը" total row
+  պետական պատվերներ               – period as "19-30.10.2026", total as text "3 200 000", a "Чеков" row
 """
 from __future__ import annotations
 
@@ -78,6 +82,26 @@ def write_standard(ws, title, data, checks_label="Чеков", as_datetime=False
     return tot_c, tot_s, tot_d
 
 
+def write_period_sheets(wb):
+    ws = wb.create_sheet("LOT 4")
+    ws.append(["LOT 4 — COP17 catering"]); ws.append([])
+    ws.append(["Период", "19.10.2026 - 30.10.2026", 5_400_000])
+
+    ws = wb.create_sheet("side events, CBD, Ֆուրշետներ")
+    ws.append(["Ամսաթիվ", "Միջոցառում", "Գումար"])
+    ws.append([datetime(2026, 10, 20), "CBD reception", 850_000])
+    ws.append([datetime(2026, 10, 22), "Ֆուրշետ · Pavilion B", 1_250_000])
+    ws.append([datetime(2026, 10, 24), "Side event dinner", 640_000])
+    ws.append(["Ընդամենը", None, 2_740_000])
+
+    ws = wb.create_sheet("պետական պատվերներ")
+    ws.append(["Պետական պատվերներ"]); ws.append(["Ժամանակահատված", "19-30.10.2026", "3 200 000"])
+    ws.append(["Чеков", None, 14])
+    return {"LOT 4": (None, 5_400_000, (date(2026, 10, 19), date(2026, 10, 30))),
+            "side events, CBD, Ֆուրշետներ": (None, 2_740_000, (date(2026, 10, 20), date(2026, 10, 24))),
+            "պետական պատվերներ": (14, 3_200_000, (date(2026, 10, 19), date(2026, 10, 30)))}
+
+
 def main(path: str):
     wb = Workbook()
     wb.remove(wb.active)
@@ -91,11 +115,14 @@ def main(path: str):
                                        as_datetime=True, as_text=True)
     expected["LOT 10"] = write_standard(wb.create_sheet("LOT 10"), "OLAP Отчет по продажам — LOT 10",
                                         rows_for(10, True, True))
+    periods = write_period_sheets(wb)
     wb.save(path)
     print("wrote", path)
     for k, (c, s, d) in expected.items():
         print(f"  {k:7} checks={c:5} sales={s:>12,} discount={d:>10,}")
-    return expected
+    for k, (c, s, (a, b)) in periods.items():
+        print(f"  {k:30} total={s:>12,} checks={c} period={a}..{b}")
+    return expected, periods
 
 
 if __name__ == "__main__":
