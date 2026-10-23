@@ -83,10 +83,13 @@ def write_standard(ws, title, data, checks_label="Чеков", as_datetime=False
 
 
 def write_period_sheets(wb):
+    """Three period-summary shapes seen in practice."""
+    # 1. LOT 4 — one row: label · period string · total in column C
     ws = wb.create_sheet("LOT 4")
     ws.append(["LOT 4 — COP17 catering"]); ws.append([])
     ws.append(["Период", "19.10.2026 - 30.10.2026", 5_400_000])
 
+    # 2. side events — dated lines with an Armenian total row
     ws = wb.create_sheet("side events, CBD, Ֆուրշետներ")
     ws.append(["Ամսաթիվ", "Միջոցառում", "Գումար"])
     ws.append([datetime(2026, 10, 20), "CBD reception", 850_000])
@@ -94,12 +97,17 @@ def write_period_sheets(wb):
     ws.append([datetime(2026, 10, 24), "Side event dinner", 640_000])
     ws.append(["Ընդամենը", None, 2_740_000])
 
-    ws = wb.create_sheet("պետական պատվերներ")
-    ws.append(["Պետական պատվերներ"]); ws.append(["Ժամանակահատված", "19-30.10.2026", "3 200 000"])
-    ws.append(["Чеков", None, 14])
+    # 3. state orders — iiko-like header, a "по" period string, a transfer payment, text numbers, Итого,
+    #    and the alternative sheet name
+    ws = wb.create_sheet("պետական գնումներ")
+    ws.append(["Պետական պատվերներ"]); ws.append([])
+    ws.append(["Учетный день", "Тип оплаты", "Сумма со скидкой", "Чеков"])
+    ws.append(["01.10.2026 по 21.10.2026", "Փոխանցում", "2 450 000", 9])
+    ws.append([None, "Փոխանցումով (invoice)", "750 000", 5])
+    ws.append(["Итого", None, "3 200 000", 14])
     return {"LOT 4": (None, 5_400_000, (date(2026, 10, 19), date(2026, 10, 30))),
             "side events, CBD, Ֆուրշետներ": (None, 2_740_000, (date(2026, 10, 20), date(2026, 10, 24))),
-            "պետական պատվերներ": (14, 3_200_000, (date(2026, 10, 19), date(2026, 10, 30)))}
+            "պետական գնումներ": (14, 3_200_000, (date(2026, 10, 1), date(2026, 10, 21)))}
 
 
 def main(path: str):
