@@ -26,11 +26,11 @@ CACHE_TTL_SECONDS = 300
 # ---------------------------------------------------------------- sections
 @dataclass(frozen=True)
 class Section:
-    key: str          # internal id and tab label (exact sheet name for live sheets)
+    key: str          # internal id and tab label (exact sheet name for workbook sheets)
     icon: str
-    kind: str         # "global" | "sheet" | "sample" | "compliments"
+    kind: str         # "global" | "sheet" | "compliments"
     color: str        # accent used on the tab, the KPI rail and the charts
-    sheet: str | None = None   # workbook sheet to load (kind == "sheet" / "sample")
+    sheet: str | None = None   # workbook sheet to load (kind == "sheet")
 
     @property
     def label(self) -> str:
@@ -39,50 +39,30 @@ class Section:
 
 SECTIONS: tuple[Section, ...] = (
     Section("General", "🌐", "global", "#2E7D4F"),
-    Section("LOT 3", "🏪", "sheet", "#3C6E9E", sheet="LOT 3"),
-    Section("LOT 8", "🏪", "sheet", "#3C6E9E", sheet="LOT 8"),
-    Section("LOT 9", "🏪", "sheet", "#3C6E9E", sheet="LOT 9"),
-    Section("LOT 10", "🏪", "sheet", "#3C6E9E", sheet="LOT 10"),
-    Section("LOT 4", "🏪", "sample", "#3C6E9E", sheet="LOT 4"),
-    Section("side events, CBD, Ֆուրշետներ", "🎪", "sample", "#C98F0E",
-            sheet="side events, CBD, Ֆուրշետներ"),
-    Section("պետական պատվերներ", "🏛️", "sample", "#1F5F3F", sheet="պետական պատվերներ"),
+    Section("LOT 3", "🏪", "sheet", "#4F6472", sheet="LOT 3"),
+    Section("LOT 8", "🏪", "sheet", "#4F6472", sheet="LOT 8"),
+    Section("LOT 9", "🏪", "sheet", "#4F6472", sheet="LOT 9"),
+    Section("LOT 10", "🏪", "sheet", "#4F6472", sheet="LOT 10"),
+    Section("LOT 4", "🏪", "sheet", "#4F6472", sheet="LOT 4"),
+    Section("side events, CBD, Ֆուրշետներ", "🎪", "sheet", "#C98F0E", sheet="side events, CBD, Ֆուրշետներ"),
+    Section("պետական պատվերներ", "🏛️", "sheet", "#1F5F3F", sheet="պետական պատվերներ"),
     Section("Compliments", "🎁", "compliments", "#C8553D"),
 )
 SECTION_BY_KEY = {s.key: s for s in SECTIONS}
-SALES_SECTIONS = tuple(s for s in SECTIONS if s.kind in ("sheet", "sample"))
+SALES_SECTIONS = tuple(s for s in SECTIONS if s.kind == "sheet")
 
-# Sheets listed as "sample" are generated ONLY when the workbook has no such sheet.
-# The moment a real sheet with that name appears in the workbook, it is used instead.
-SAMPLE_PROFILES: dict[str, dict] = {
-    "LOT 4": dict(
-        seed=4,
-        checks=(70, 160),             # checks per trading day
-        aov=(3_200, 5_800),           # average order value, ֏
-        payments={"POS Arcus": 0.55, "Банковские карты": 0.30, "Наличные": 0.15},
-        active_days=1.0,              # share of event days with sales
-        discount_share=0.0,           # 0 → no "Сумма скидки" column at all
-        compliments=(0, 3),           # free-of-charge checks per day (без оплаты)
-    ),
-    "side events, CBD, Ֆուրշետներ": dict(
-        seed=7,
-        checks=(2, 9),
-        aov=(180_000, 650_000),
-        payments={"Փոխանցումով": 0.65, "Банковские карты": 0.35},
-        active_days=0.6,
-        discount_share=0.0,
-        compliments=(0, 1),
-    ),
-    "պետական պատվերներ": dict(
-        seed=11,
-        checks=(1, 4),
-        aov=(450_000, 1_400_000),
-        payments={"Փոխանցումով": 0.85, "Банковские карты": 0.15},
-        active_days=0.45,
-        discount_share=0.0,
-        compliments=(0, 0),
-    ),
+# Every sheet is parsed by shape, not by name:
+#   * an iiko OLAP pivot (header row with Учетный день / Тип оплаты / Чеков / Сумма …) → daily rows;
+#   * otherwise a "column C" summary sheet (LOT 4, side events, պետական պատվերներ): one total in
+#     column C plus the date period written somewhere on the sheet → a period total.
+
+# Payment-type consolidation (matched after casefold/strip). Unlisted types keep their own label.
+PAYMENT_MAP: dict[str, str] = {
+    "pos arcus": "Bank Cards",
+    "банковские карты": "Bank Cards",
+    "наличные": "Cash",
 }
+PAYMENT_ORDER = ("Bank Cards", "Cash")          # first columns of the day-by-day table
 
 # Payment-type label that marks free-of-charge / promotional orders in iiko.
 COMPLIMENT_MARKERS = ("без оплаты",)
@@ -96,13 +76,13 @@ PRESET_CUSTOM = "Custom Date Range"
 PRESETS = (PRESET_FULL, PRESET_TODAY, PRESET_YESTERDAY, PRESET_WEEK, PRESET_CUSTOM)
 
 # ---------------------------------------------------------------- brand palette
-# COP17 2026 Armenia accents: earth green, slate blue, gold — on an off-white console.
+# COP17 2026 Armenia accents: earth green, slate grey, gold — on an off-white console.
 THEME = dict(
     green="#2E7D4F",
     green_dark="#1F5F3F",
     green_soft="#E6F1EA",
-    blue="#3C6E9E",
-    blue_soft="#E7EEF5",
+    blue="#4F6472",
+    blue_soft="#EBEFF2",
     gold="#C98F0E",
     gold_soft="#FBF3E1",
     coral="#C8553D",
