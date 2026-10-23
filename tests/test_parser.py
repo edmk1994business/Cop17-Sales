@@ -126,9 +126,10 @@ def test_daily_pivot_columns():
     ds = D.build_dataset(sheets, "local")
     df = D.select(ds, GENERAL, ds.dmin, ds.dmax)
     pv = D.daily_pivot(df)
-    assert list(pv.columns) == ["date", "Bank Cards", "Cash", "checks", "sales", "discount"]
+    # fixed layout: the three standard payment columns are always present (zero-filled when absent)
+    assert list(pv.columns) == ["date", "Bank Cards", "Cash", "Bank Transfers / Invoices", "checks", "sales", "discount"]
     assert len(pv) == 4
-    assert abs((pv["Bank Cards"] + pv["Cash"] - pv["sales"]).abs().max()) < 1e-6
+    assert abs((pv["Bank Cards"] + pv["Cash"] + pv["Bank Transfers / Invoices"] - pv["sales"]).abs().max()) < 1e-6
 
 
 if __name__ == "__main__":
