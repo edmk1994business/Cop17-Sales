@@ -7,13 +7,13 @@ TIDY_COLUMNS = [
     "section",        # tab / sheet the row belongs to
     "entity",         # optional outer dimension in the pivot (e.g. trading unit); "" if none
     "date",           # datetime.date
-    "payment_type",   # cleaned label, e.g. "POS Arcus", "Наличные", "без оплаты"
+    "payment_type",   # consolidated label: "Bank Cards", "Cash", "без оплаты", or the original
+    "payment_raw",    # label as exported by iiko, e.g. "POS Arcus"
     "checks",         # Чеков
     "sales",          # Сумма со скидкой (֏)
     "discount",       # Сумма скидки (֏) — 0 when the sheet has no such column
     "gross",          # Сумма без скидки (֏) = sales + discount when the sheet has no such column
     "is_compliment",  # payment type is "без оплаты"
-    "is_sample",      # generated, not from the workbook
 ]
 
 NUMERIC = ["checks", "sales", "discount", "gross"]
@@ -24,5 +24,4 @@ def empty_tidy() -> pd.DataFrame:
     for c in NUMERIC:
         df[c] = df[c].astype(float)
     df["is_compliment"] = df["is_compliment"].astype(bool)
-    df["is_sample"] = df["is_sample"].astype(bool)
     return df
