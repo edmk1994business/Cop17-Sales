@@ -14,10 +14,11 @@ EVENT_START = date(2026, 10, 19)
 EVENT_END = date(2026, 10, 30)
 
 # ---------------------------------------------------------------- data sources
-# Dropbox direct link (dl=1). Override with SOURCE_URL in .streamlit/secrets.toml.
+# Dropbox share link; dl=0 is rewritten to dl=1 (direct download) at load time.
+# Override with SOURCE_URL in .streamlit/secrets.toml.
 DEFAULT_SOURCE_URL = (
     "https://www.dropbox.com/scl/fi/0qn6dhg9a166d13nt95ec/COP-17-Sales.xlsx"
-    "?rlkey=owkahbr1fyaht9jb3z5qfjl0u&dl=1"
+    "?rlkey=owkahbr1fyaht9jb3z5qfjl0u&dl=0"
 )
 LOCAL_FALLBACK = "data/COP-17-Sales.xlsx"
 CACHE_TTL_SECONDS = 300
@@ -26,11 +27,11 @@ CACHE_TTL_SECONDS = 300
 # ---------------------------------------------------------------- sections
 @dataclass(frozen=True)
 class Section:
-    key: str          # internal id and tab label (exact sheet name for workbook sheets)
+    key: str                     # clean dashboard name (tab label, charts, tables)
     icon: str
-    kind: str         # "global" | "sheet" | "compliments"
-    color: str        # accent used on the tab, the KPI rail and the charts
-    sheet: str | None = None   # workbook sheet to load (kind == "sheet")
+    kind: str                    # "global" | "sheet" | "compliments"
+    color: str                   # accent used on the tab, the KPI rail and the cards
+    sheets: tuple[str, ...] = () # workbook sheet name(s) to look for, in order of preference
 
     @property
     def label(self) -> str:
@@ -38,14 +39,16 @@ class Section:
 
 
 SECTIONS: tuple[Section, ...] = (
-    Section("General", "🌐", "global", "#2E7D4F"),
-    Section("LOT 3", "🏪", "sheet", "#4F6472", sheet="LOT 3"),
-    Section("LOT 8", "🏪", "sheet", "#4F6472", sheet="LOT 8"),
-    Section("LOT 9", "🏪", "sheet", "#4F6472", sheet="LOT 9"),
-    Section("LOT 10", "🏪", "sheet", "#4F6472", sheet="LOT 10"),
-    Section("LOT 4", "🏪", "sheet", "#4F6472", sheet="LOT 4"),
-    Section("side events, CBD, Ֆուրշետներ", "🎪", "sheet", "#C98F0E", sheet="side events, CBD, Ֆուրշետներ"),
-    Section("պետական պատվերներ", "🏛️", "sheet", "#1F5F3F", sheet="պետական պատվերներ"),
+    Section("General / Global View", "🌐", "global", "#2E7D4F"),
+    Section("Restaurant Area", "🏪", "sheet", "#2E7D4F", sheets=("LOT 3",)),
+    Section("Food Trucks", "🚛", "sheet", "#2F6BB5", sheets=("LOT 8",)),
+    Section("Coffee, Grab & Go", "☕", "sheet", "#BC860C", sheets=("LOT 9",)),
+    Section("Staff Canteen", "🍽️", "sheet", "#8A4FC7", sheets=("LOT 10",)),
+    Section("Banquet Hall", "🏛️", "sheet", "#D04A3B", sheets=("LOT 4",)),
+    Section("Side Events & Banquets", "🎪", "sheet", "#15A0AA",
+            sheets=("side events, CBD, Ֆուրշետներ", "side events")),
+    Section("State Orders (պետական պատվերներ)", "📜", "sheet", "#B0571A",
+            sheets=("պետական պատվերներ", "պետական գնումներ")),
     Section("Compliments", "🎁", "compliments", "#C8553D"),
 )
 SECTION_BY_KEY = {s.key: s for s in SECTIONS}
@@ -53,16 +56,30 @@ SALES_SECTIONS = tuple(s for s in SECTIONS if s.kind == "sheet")
 
 # Every sheet is parsed by shape, not by name:
 #   * an iiko OLAP pivot (header row with Учетный день / Тип оплаты / Чеков / Сумма …) → daily rows;
-#   * otherwise a "column C" summary sheet (LOT 4, side events, պետական պատվերներ): one total in
-#     column C plus the date period written somewhere on the sheet → a period total.
+#   * otherwise a period-summary sheet (Banquet Hall, Side Events, State Orders): one total in
+#     column C / "Сумма со скидкой" / the Итого row, plus the period written on the sheet
+#     ("01.10.2026 по 21.10.2026") → a period total that is never flagged as missing.
 
-# Payment-type consolidation (matched after casefold/strip). Unlisted types keep their own label.
+# Payment-type consolidation. Exact labels first (after casefold/strip), then prefixes.
 PAYMENT_MAP: dict[str, str] = {
     "pos arcus": "Bank Cards",
     "банковские карты": "Bank Cards",
     "наличные": "Cash",
+    "փոխանցում": "Bank Transfers / Invoices",
 }
-PAYMENT_ORDER = ("Bank Cards", "Cash")          # first columns of the day-by-day table
+PAYMENT_PREFIXES: dict[str, str] = {
+    "փոխանց": "Bank Transfers / Invoices",     # Փոխանցում / Փոխանցումով / Փոխանցում (invoice)
+    "безнал": "Bank Transfers / Invoices",     # Безналичный расчёт
+    "перечисл": "Bank Transfers / Invoices",
+    "transfer": "Bank Transfers / Invoices",
+    "invoice": "Bank Transfers / Invoices",
+    "наличн": "Cash",
+    "cash": "Cash",
+    "банковск": "Bank Cards",
+    "pos ": "Bank Cards",
+    "card": "Bank Cards",
+}
+PAYMENT_ORDER = ("Bank Cards", "Cash", "Bank Transfers / Invoices")   # column order in the day table
 
 # Payment-type label that marks free-of-charge / promotional orders in iiko.
 COMPLIMENT_MARKERS = ("без оплаты",)
@@ -98,13 +115,5 @@ THEME = dict(
 
 # Categorical colours for sections in charts (fixed order — never cycled).
 # Validated as colour-blind-safe and ≥3:1 on white in this order; keep the order if you edit.
-CHART_COLORS = {
-    "LOT 3": "#2E7D4F",
-    "LOT 8": "#2F6BB5",
-    "LOT 9": "#BC860C",
-    "LOT 10": "#8A4FC7",
-    "LOT 4": "#D04A3B",
-    "side events, CBD, Ֆուրշետներ": "#15A0AA",
-    "պետական պատվերներ": "#B0571A",
-    "Compliments": "#7A8780",
-}
+CHART_COLORS = {sec.key: sec.color for sec in SECTIONS if sec.kind == "sheet"}
+CHART_COLORS["Compliments"] = "#7A8780"
