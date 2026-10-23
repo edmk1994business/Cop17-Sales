@@ -2,8 +2,9 @@
 
 Builds the mock iiko workbook and checks:
   * every daily sheet's parsed totals equal its own "Итого" row,
-  * POS Arcus + Банковские карты → Bank Cards and Наличные → Cash, with totals preserved,
-  * the three column-C sheets yield the right total, period and (where stated) check count,
+  * POS Arcus + Банковские карты → Bank Cards, Наличные → Cash, Փոխանցում → Bank Transfers / Invoices,
+  * the three period-summary sheets yield the right total, period and (where stated) check count —
+    including the iiko-headed "01.10.2026 по 21.10.2026" shape and the "պետական գնումներ" sheet alias,
   * compliments are split out, period totals are counted only when fully covered, discounts omitted at 0.
 """
 from __future__ import annotations
@@ -53,7 +54,6 @@ def test_payment_consolidation():
 def test_column_c_period_sheets():
     sheets, _, periods = _build()
     for name, (checks, total, (start, end)) in periods.items():
-        assert not D.looks_like_pivot(sheets[name]), name
         p = D.parse_period_sheet(sheets[name], name)
         assert p is not None, name
         assert int(p.total) == total, name
@@ -61,26 +61,52 @@ def test_column_c_period_sheets():
         assert p.checks == checks, name
     side = D.parse_period_sheet(sheets["side events, CBD, Ֆուրշետներ"], "side events, CBD, Ֆուրշետներ")
     assert [e[1] for e in side.entries] == ["CBD reception", "Ֆուրշետ · Pavilion B", "Side event dinner"]
+    state = D.parse_period_sheet(sheets["պետական գնումներ"], "State Orders")
+    assert {e[1] for e in state.entries} == {"Bank Transfers / Invoices"}
+    assert all(e[0] is None for e in state.entries)          # a period range on the line is not a line date
+
+
+def test_sheet_aliases_and_period_fallback():
+    sheets, _, _ = _build()
+    ds = D.build_dataset(sheets, "local")
+    info = ds.info["State Orders (պետական պատվերներ)"]
+    assert info.source == "period" and info.sheet == "պետական գնումներ"
+    assert ds.info["Banquet Hall"].source == "period" and ds.info["Banquet Hall"].sheet == "LOT 4"
+    assert ds.info["Restaurant Area"].source == "daily" and ds.info["Restaurant Area"].sheet == "LOT 3"
+    assert not [k for k, i in ds.info.items() if i.source == "missing"]
+
+
+def test_payment_mapping_rules():
+    cases = {"POS Arcus": "Bank Cards", "Банковские карты": "Bank Cards", "Наличные": "Cash",
+             "Փոխանցում": "Bank Transfers / Invoices", "Փոխանցումով": "Bank Transfers / Invoices",
+             "Безналичный расчет": "Bank Transfers / Invoices", "Glovo": "Glovo", "без оплаты": "без оплаты"}
+    for raw, want in cases.items():
+        assert D.map_payment(raw) == want, raw
+
+
+GENERAL = "General / Global View"
 
 
 def test_period_totals_counted_only_when_fully_covered():
     sheets, expected, periods = _build()
     ds = D.build_dataset(sheets, "local")
-    assert (ds.dmin, ds.dmax) == (date(2026, 10, 19), date(2026, 10, 30))  # widest range across all sheets
-    full = D.kpis(D.select(ds, "General", ds.dmin, ds.dmax), D.select_periods(ds, "General", ds.dmin, ds.dmax))
+    assert (ds.dmin, ds.dmax) == (date(2026, 10, 1), date(2026, 10, 30))  # widest range across all sheets
+    full = D.kpis(D.select(ds, GENERAL, ds.dmin, ds.dmax), D.select_periods(ds, GENERAL, ds.dmin, ds.dmax))
     daily_net = sum(s for _, s, _ in expected.values()) - 81_777  # LOT 10 compliments are excluded
     assert int(full["sales"]) == daily_net + sum(t for _, t, _ in periods.values())
     one_day = date(2026, 10, 22)
-    assert D.select_periods(ds, "General", one_day, one_day) == []
-    assert {p.section for p in D.excluded_periods(ds, "General", one_day, one_day)} == set(periods)
-    assert len(D.select_periods(ds, "General", date(2026, 10, 20), date(2026, 10, 24))) == 1  # side events only
+    assert D.select_periods(ds, GENERAL, one_day, one_day) == []
+    # Banquet Hall (19–30 Oct) and Side Events (20–24 Oct) touch 22 Oct but are not covered → listed as excluded;
+    # State Orders (1–21 Oct) does not touch it at all, so it is neither counted nor listed.
+    assert {p.section for p in D.excluded_periods(ds, GENERAL, one_day, one_day)} == {"Banquet Hall", "Side Events & Banquets"}
+    assert len(D.select_periods(ds, GENERAL, date(2026, 10, 20), date(2026, 10, 24))) == 1  # side events only
 
 
 def test_compliments_are_split_out():
     sheets, _, _ = _build()
     ds = D.build_dataset(sheets, "local")
     comp = D.select(ds, "Compliments", ds.dmin, ds.dmax)
-    general = D.select(ds, "General", ds.dmin, ds.dmax)
+    general = D.select(ds, GENERAL, ds.dmin, ds.dmax)
     assert comp["is_compliment"].all() and len(comp) > 0
     assert not general["is_compliment"].any()
     assert set(comp["payment_raw"].str.casefold()) == {"без оплаты"}
@@ -89,16 +115,16 @@ def test_compliments_are_split_out():
 def test_discount_column_omitted_when_zero():
     sheets, _, _ = _build()
     ds = D.build_dataset(sheets, "local")
-    lot3 = D.select(ds, "LOT 3", ds.dmin, ds.dmax)
+    lot3 = D.select(ds, "Restaurant Area", ds.dmin, ds.dmax)
     assert D.kpis(lot3)["has_discount"] is False
     assert "Сумма скидки" not in D.raw_records(lot3).columns
-    assert D.kpis(D.select(ds, "LOT 10", ds.dmin, ds.dmax))["has_discount"] is True
+    assert D.kpis(D.select(ds, "Staff Canteen", ds.dmin, ds.dmax))["has_discount"] is True
 
 
 def test_daily_pivot_columns():
     sheets, _, _ = _build()
     ds = D.build_dataset(sheets, "local")
-    df = D.select(ds, "General", ds.dmin, ds.dmax)
+    df = D.select(ds, GENERAL, ds.dmin, ds.dmax)
     pv = D.daily_pivot(df)
     assert list(pv.columns) == ["date", "Bank Cards", "Cash", "checks", "sales", "discount"]
     assert len(pv) == 4
@@ -107,6 +133,7 @@ def test_daily_pivot_columns():
 
 if __name__ == "__main__":
     for fn in (test_every_daily_sheet_reconciles_with_itogo, test_payment_consolidation, test_column_c_period_sheets,
+               test_sheet_aliases_and_period_fallback, test_payment_mapping_rules,
                test_period_totals_counted_only_when_fully_covered, test_compliments_are_split_out,
                test_discount_column_omitted_when_zero, test_daily_pivot_columns):
         fn()
