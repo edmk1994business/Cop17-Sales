@@ -644,11 +644,11 @@ def payment_totals(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def payment_columns(df: pd.DataFrame) -> list[str]:
-    """Bank Cards, Cash, then any other payment type present — by sales, descending."""
+    """The fixed layout — Bank Cards, Cash, Bank Transfers / Invoices — then any other type present."""
     if df.empty:
         return []
     present = payment_totals(df)["payment_type"].tolist()
-    return [p for p in config.PAYMENT_ORDER if p in present] + [p for p in present if p not in config.PAYMENT_ORDER]
+    return list(config.PAYMENT_ORDER) + [p for p in present if p not in config.PAYMENT_ORDER]
 
 
 def daily_pivot(df: pd.DataFrame) -> pd.DataFrame:
