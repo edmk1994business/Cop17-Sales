@@ -2,6 +2,8 @@
 
 Run locally:   streamlit run app.py
 Streamlit Cloud: main file = app.py, Python 3.11+, secrets → SOURCE_URL (optional).
+
+Page order: masthead → date controls → ↻ Refresh data → section tabs → section page.
 """
 from __future__ import annotations
 
@@ -38,21 +40,14 @@ with st.spinner("Loading sales workbook…"):
 
 
 def go_to_section(section_key: str | None) -> None:
-    """Card click on General: switch the tab (None = stay) and scroll to the top on the rerun."""
+    """Card click on General: switch the tab (None = stay) and land at the top on the rerun."""
     if section_key is not None:
         st.session_state["section"] = config.SECTION_BY_KEY[section_key].label
     st.session_state["scroll_top"] = True
 
 
-# ------------------------------------------------------------------ header row
-head, action = st.columns([6, 1.2], vertical_alignment="center")
-with head:
-    ui.render_header(ds)
-with action:
-    if st.button("↻ Refresh data", key="refresh", width="stretch"):
-        data.load_dataset.clear()
-        st.rerun()
-
+# ------------------------------------------------------------------ masthead
+ui.render_header(ds)
 if ds.error:
     st.warning(ds.error, icon="⚠️")
 if ds.is_empty:
@@ -63,13 +58,16 @@ if ds.is_empty:
     )
     st.stop()
 
-# ------------------------------------------------------------------ navigation + period
+# ------------------------------------------------------------------ controls: period → refresh → tabs
+start, end = ui.render_date_controls(ds)
+if ui.render_refresh_button():
+    data.load_dataset.clear()
+    st.rerun()
 section_key = ui.render_tabs()
 if st.session_state.pop("scroll_top", False):             # set by a tab click or a section-card click
     ui.scroll_to_top()
 section = config.SECTION_BY_KEY[section_key]
 info = ds.info.get(section_key)
-start, end = ui.render_date_controls(ds)
 
 # ------------------------------------------------------------------ data for this tab
 df = data.select(ds, section_key, start, end)                 # daily rows (iiko pivot sheets)
@@ -90,7 +88,7 @@ show_discount = k["has_discount"]  # "Сумма скидки" is omitted everyw
 if section.kind == "global":
     sections = data.section_totals(df, periods)
     ui.render_charts(sections, data.daily_by_section(df))
-    ui.render_section_cards(sections, k, go_to_section)          # click → opens that tab, scrolls to top
+    ui.render_section_cards(sections, k, go_to_section)          # click → opens that tab, lands at the top
 elif section.kind == "compliments":
     ui.render_section_table(data.section_totals(df), show_discount, title="Compliments by section")
 
