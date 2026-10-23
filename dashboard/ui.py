@@ -21,7 +21,7 @@ import streamlit as st
 
 from . import config, dates
 from .config import THEME as T
-from .data import Dataset, SectionInfo
+from .data import Dataset, PeriodSummary, SectionInfo
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
@@ -69,7 +69,12 @@ def inject_css() -> None:
     [data-testid="stHeader"] {{display: none !important;}}
     [data-testid="stToolbar"] {{display: none !important;}}
     .viewerBadge_container__1s52n, .stAppViewerFooter {{display: none !important;}}
-    [data-testid="stDecoration"], [data-testid="stStatusWidget"], [data-testid="stAppToolbar"] {{display: none !important;}}
+    div[class*="stAppToolbar"],
+    div[data-testid="stDecoration"],
+    [data-testid="stStatusWidget"] {{
+        display: none !important;
+    }}
+    [data-testid="stAppToolbar"] {{display: none !important;}}
     .block-container {{
         padding-top: 2rem !important;
         padding-bottom: 5rem !important;
@@ -93,7 +98,7 @@ def inject_css() -> None:
     }}
     .stApp, [data-testid="stAppViewContainer"] {{ background: var(--bg); }}
     [data-testid="stAppViewContainer"] {{ overflow-x: clip; }}
-    .stApp, .stApp p, .stApp div, .stApp span, .stApp td, .stApp th {{
+    .stApp, .stApp p, .stApp div, .stApp span:not([data-testid="stIconMaterial"]), .stApp td, .stApp th {{
         font-family: "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }}
     .stApp {{ color: var(--ink); }}
@@ -148,9 +153,18 @@ def inject_css() -> None:
     .sec-meta {{ font-size:.8rem; color: var(--ink-3); margin-top:2px; }}
     .badge {{ display:inline-flex; align-items:center; gap:6px; font-size:.72rem; font-weight:700; letter-spacing:.03em; text-transform:uppercase; padding:4px 10px; border-radius:8px; }}
     .badge-live {{ background: var(--green-soft); color: var(--green-dark); }}
-    .badge-sample {{ background: var(--gold-soft); color: #7A5306; }}
     .badge-missing {{ background: #FBE9E5; color: #8A2E1E; }}
     .badge-mixed {{ background: var(--blue-soft); color: #244B70; }}
+    .badge-period {{ background: var(--blue-soft); color: #2F4350; }}
+    .tag-period {{ display:inline-block; font-size:.66rem; font-weight:700; letter-spacing:.03em; text-transform:uppercase; padding:2px 7px; border-radius:6px; background:var(--blue-soft); color:#2F4350; margin-left:8px; vertical-align:middle; white-space:nowrap; }}
+    .note {{ font-size:.8rem; color: var(--ink-2); background: var(--gold-soft); border:1px solid #F0E2BE; border-radius:10px; padding:8px 12px; margin-top:6px; }}
+    .gt {{ display:flex; align-items:center; gap:10px 14px; flex-wrap:wrap; margin:10px 0 2px; }}
+    .gt-item {{ display:flex; flex-direction:column; gap:2px; padding:8px 12px; border-radius:10px; background:#F3F6F2; border:1px solid var(--border); min-width:0; }}
+    .gt-grand {{ background: var(--green-soft); border-color: #CFE3D5; }}
+    .gt-label {{ font-size:.68rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3); max-width:420px; line-height:1.3; }}
+    .gt-value {{ font-size:1.02rem; font-weight:800; color:var(--ink); font-variant-numeric: tabular-nums; white-space:nowrap; }}
+    .gt-grand .gt-value {{ color: var(--green-dark); }}
+    .gt-plus {{ font-weight:800; color: var(--ink-3); }}
 
     /* ---- KPI cards ---- */
     .kpi-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap:12px; margin: 6px 0 4px; }}
@@ -177,10 +191,10 @@ def inject_css() -> None:
     table.dt tr.total td {{ font-weight:800; background: #F3F6F2; border-top:1px solid var(--border); }}
     table.dt tr.day-total td {{ font-weight:700; background: #F8FAF7; color: var(--ink); }}
     table.dt tr.grand td {{ font-weight:800; background: var(--green-soft); color: var(--green-dark); border-top:2px solid var(--green); }}
+    table.dt tr.grand td:first-child {{ white-space:nowrap; }}
     .share-bar {{ display:inline-block; height:6px; border-radius:3px; background: var(--accent, var(--green)); vertical-align:middle; margin-right:8px; }}
     .pay-pill {{ display:inline-block; padding:3px 9px; border-radius:999px; font-size:.78rem; font-weight:600; background:#F3F4F6; color:#4B5563; white-space:nowrap; }}
     .pay-pill.comp {{ background:#FBE9E5; color:#8A2E1E; }}
-    .tag-sample {{ display:inline-block; font-size:.66rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase; padding:2px 7px; border-radius:6px; background:var(--gold-soft); color:#7A5306; margin-left:8px; vertical-align:middle; }}
     .dot {{ display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:8px; vertical-align:middle; }}
     .lg {{ display:flex; flex-wrap:wrap; gap:4px 14px; padding:2px 4px 8px; }}
     .lg-item {{ font-size:.78rem; color:var(--ink-2); white-space:nowrap; display:inline-flex; align-items:center; }}
@@ -234,17 +248,18 @@ def _logo_data_uri(name: str = "cop17.jpg", width: int = 420) -> str | None:
 def render_header(ds: Dataset) -> None:
     logo = _logo_data_uri()
     logo_html = f'<img class="cop-logo" src="{logo}" alt="COP17 2026 Armenia">' if logo else ""
-    if ds.df.empty:
+    if ds.is_empty:
         status = '<span class="chip"><span class="chip-dot red"></span>No data loaded</span>'
     else:
         origin = {"dropbox": "Dropbox", "local": "local file"}.get(ds.origin, "—")
         updated = pd.Timestamp(ds.loaded_at, unit="s", tz="UTC").tz_convert(config.TIMEZONE).strftime("%H:%M")
-        status = (
-            f'<span class="chip"><span class="chip-dot"></span>{esc(origin)} · loaded {updated}</span>'
-            f'<span class="chip"><span class="chip-dot"></span>{ds.live_count} live sheet{"s" if ds.live_count != 1 else ""}</span>'
-        )
-        if ds.sample_count:
-            status += f'<span class="chip"><span class="chip-dot amber"></span>{ds.sample_count} sample section{"s" if ds.sample_count != 1 else ""}</span>'
+        status = f'<span class="chip"><span class="chip-dot"></span>{esc(origin)} · loaded {updated}</span>'
+        status += f'<span class="chip"><span class="chip-dot"></span>{ds.daily_count} daily sheet{"s" if ds.daily_count != 1 else ""}</span>'
+        if ds.period_count:
+            status += f'<span class="chip"><span class="chip-dot amber"></span>{ds.period_count} period-total sheet{"s" if ds.period_count != 1 else ""}</span>'
+        missing = [k for k, i in ds.info.items() if i.source == "missing"]
+        if missing:
+            status += f'<span class="chip"><span class="chip-dot red"></span>{len(missing)} sheet{"s" if len(missing) != 1 else ""} missing</span>'
         if ds.dmin and ds.dmax:
             status += f'<span class="chip"><span class="chip-dot grey"></span>Data {esc(dates.label(ds.dmin, ds.dmax))}</span>'
     st.html(
@@ -286,22 +301,23 @@ def render_date_controls(ds: Dataset) -> tuple[date, date]:
 
 
 # ----------------------------------------------------------------------------- section header & KPIs
-def render_section_head(section: config.Section, info: SectionInfo | None, k: dict) -> None:
+def render_section_head(section: config.Section, info: SectionInfo | None, ds: Dataset) -> None:
     if section.kind == "global":
         meta = "All LOTs and sections combined · compliments excluded"
-        badge = '<span class="badge badge-mixed">Combined</span>' if k.get("has_sample") else '<span class="badge badge-live">Live data</span>'
+        badge = '<span class="badge badge-live">Combined</span>'
     elif section.kind == "compliments":
-        meta = "Free-of-charge orders (payment type «без оплаты») across every section"
+        meta = "Free-of-charge orders (payment type «без оплаты») across every LOT"
         badge = ""
     elif info is None or info.source == "missing":
-        meta = (info.note if info else "Sheet not found in the workbook.")
+        meta = info.note if info else "Sheet not found in the workbook."
         badge = '<span class="badge badge-missing">Sheet missing</span>'
-    elif info.source == "sample":
-        meta = "No sheet in the workbook yet — generated sample data (replaced automatically once the sheet exists)"
-        badge = '<span class="badge badge-sample">Sample data</span>'
+    elif info.source == "period":
+        p = ds.periods[section.key]
+        meta = f"Period total from sheet «{info.sheet}» · {dates.label(p.start, p.end)}"
+        badge = '<span class="badge badge-period">Period total</span>'
     else:
         meta = f"Live · workbook sheet «{info.sheet}» · {info.rows} rows parsed"
-        badge = '<span class="badge badge-live">Live data</span>'
+        badge = '<span class="badge badge-live">Daily data</span>'
     st.html(
         f'<div class="sec-head" style="--accent:{section.color}">'
         f'<div class="sec-icon">{section.icon}</div>'
@@ -310,19 +326,37 @@ def render_section_head(section: config.Section, info: SectionInfo | None, k: di
     )
 
 
-def render_kpis(k: dict, section: config.Section, start: date, end: date) -> None:
+def render_kpis(k: dict, section: config.Section, start: date, end: date, periods: list[PeriodSummary]) -> None:
     accent = section.color
     is_comp = section.kind == "compliments"
-    period = f"{k['days']} trading day{'s' if k['days'] != 1 else ''} · {esc(dates.label(start, end))}"
+    single_period = section.kind == "sheet" and len(periods) == 1 and not k["days"]
+    if single_period:
+        p = periods[0]
+        sales_sub = f"Period total · {esc(dates.label(p.start, p.end))}"
+    elif k["days"]:
+        sales_sub = f"{k['days']} trading day{'s' if k['days'] != 1 else ''} · {esc(dates.label(start, end))}"
+        if periods:
+            sales_sub += f" · incl. {len(periods)} period total{'s' if len(periods) != 1 else ''}"
+    else:
+        sales_sub = f"Period totals · {esc(dates.label(start, end))}"
+    checks_sub = "Чеков · orders in the period"
+    aov_sub = "Net sales ÷ checks"
+    if k["checks_partial"] and single_period:
+        checks_sub = "No check count on this sheet"
+        aov_sub = "Needs a check count"
+    elif k["checks_partial"]:
+        names = ", ".join(p.section for p in periods if p.checks is None)
+        checks_sub = f"Not recorded for: {esc(names)}"
+        aov_sub = "Sales ÷ checks, sections with check counts only"
     cards = [
-        ("Compliments value" if is_comp else "Total Sales", f"{fmt_n(k['sales'])}<span class='unit'>{config.CURRENCY}</span>", period),
-        ("Total Checks", fmt_n(k["checks"]), "Чеков · orders in the period"),
-        ("Average Order Value", f"{fmt_n(k['aov'])}<span class='unit'>{config.CURRENCY}</span>", "Sales ÷ checks"),
+        ("Compliments value" if is_comp else "Total Net Sales", f"{fmt_n(k['sales'])}<span class='unit'>{config.CURRENCY}</span>", sales_sub),
+        ("Total Checks", fmt_n(k["checks"]) if k["checks"] else "—", checks_sub),
+        ("Average Order Value", (f"{fmt_n(k['aov'])}<span class='unit'>{config.CURRENCY}</span>" if k["checks"] else "—"), aov_sub),
     ]
     if k["has_discount"]:
         rate = k["discount"] / k["gross"] if k["gross"] else 0.0
         cards.append(("Total Discounts", f"{fmt_n(k['discount'])}<span class='unit'>{config.CURRENCY}</span>",
-                      f"{fmt_pct(rate)} of gross · before: {fmt_money(k['gross'])}"))
+                      f"{fmt_pct(rate)} of gross · before discounts: {fmt_money(k['gross'])}"))
     body = "".join(
         f'<div class="kpi" style="--accent:{accent}"><div class="kpi-label">{esc(label)}</div>'
         f'<div class="kpi-value">{value}</div><div class="kpi-sub">{sub}</div></div>'
@@ -331,12 +365,46 @@ def render_kpis(k: dict, section: config.Section, start: date, end: date) -> Non
     st.html(f'<div class="kpi-grid">{body}</div>')
 
 
+def render_excluded_note(excluded: list[PeriodSummary]) -> None:
+    """Period totals that touch the selected range but are not fully inside it are left out, and say so."""
+    if not excluded:
+        return
+    parts = ", ".join(f"{esc(p.section)} ({esc(dates.label(p.start, p.end))})" for p in excluded)
+    st.html(f'<div class="note">ⓘ Period totals are single figures for their whole period, so they are counted only when '
+            f'the selected range covers that period in full. Not included here: {parts}.</div>')
+
+
+def render_period_card(p: PeriodSummary, info: SectionInfo | None) -> None:
+    """The column-C summary of a period sheet: period, total, check count and any dated lines found."""
+    checks = fmt_n(p.checks) if p.checks else "—"
+    rows = ""
+    if p.entries:
+        rows = "".join(
+            f'<tr><td class="dim">{esc(fmt_day(d)) if d else "—"}</td><td>{esc(label)}</td><td class="num">{fmt_n(amount)}</td></tr>'
+            for d, label, amount in p.entries
+        )
+        rows += f'<tr class="grand"><td colspan="2">Total · {esc(p.total_label) or "column C"}</td><td class="num">{fmt_n(p.total)}</td></tr>'
+        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Date</th><th>Line</th><th class="num">Amount</th></tr></thead>'
+                 f'<tbody>{rows}</tbody></table></div>')
+    else:
+        table = (f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Period</th><th class="num">Checks</th><th class="num">Total</th></tr></thead>'
+                 f'<tbody><tr class="grand"><td>{esc(dates.label(p.start, p.end))}</td><td class="num">{checks}</td>'
+                 f'<td class="num">{fmt_n(p.total)}</td></tr></tbody></table></div>')
+    src = f"sheet «{info.sheet}»" if info and info.sheet else "workbook"
+    period_note = "" if p.period_from_sheet else " · no dates found on the sheet, so the period is the data range"
+    st.html(
+        f'<div class="card"><div class="card-title">Period summary<span class="muted">column C of {esc(src)} · '
+        f'{esc(dates.label(p.start, p.end))}{period_note} · {config.CURRENCY}</span></div>{table}</div>'
+    )
+
+
 # ----------------------------------------------------------------------------- tables
 def _pay(label: str, comp: bool) -> str:
     return f'<span class="pay-pill{" comp" if comp else ""}">{esc(label)}</span>'
 
 
-def render_overall_totals(totals: pd.DataFrame, show_discount: bool, title: str = "Overall totals") -> None:
+def render_overall_totals(totals: pd.DataFrame, show_discount: bool, title: str = "Overall totals",
+                          subtitle: str = "by payment type") -> None:
     if totals.empty:
         return
     disc_th = '<th class="num">Discount</th>' if show_discount else ""
@@ -355,42 +423,57 @@ def render_overall_totals(totals: pd.DataFrame, show_discount: bool, title: str 
     rows.append(f'<tr class="grand"><td>Total</td><td class="num">{fmt_n(t_checks)}</td>'
                 f'<td class="num">{fmt_n(t_sales)}</td>{disc_tot}<td class="num">100%</td></tr>')
     st.html(
-        f'<div class="card"><div class="card-title">{esc(title)}<span class="muted">by payment type · {config.CURRENCY}</span></div>'
+        f'<div class="card"><div class="card-title">{esc(title)}<span class="muted">{esc(subtitle)} · {config.CURRENCY}</span></div>'
         f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Payment type</th><th class="num">Checks</th>'
         f'<th class="num">Sales</th>{disc_th}<th class="num">Share</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
     )
 
 
-def render_daily_table(daily: pd.DataFrame, show_discount: bool) -> None:
-    if daily.empty:
+def render_grand_totals(k: dict, periods: list[PeriodSummary]) -> str:
+    """Overall grand totals strip: daily sections + period totals = grand total."""
+    if not periods:
+        return (f'<div class="gt"><span class="gt-item"><span class="gt-label">Grand total</span>'
+                f'<span class="gt-value">{fmt_money(k["sales"])}</span></span>'
+                f'<span class="gt-item"><span class="gt-label">Checks</span><span class="gt-value">{fmt_n(k["checks"])}</span></span></div>')
+    names = ", ".join(p.section for p in periods)
+    return (f'<div class="gt"><span class="gt-item"><span class="gt-label">Daily sections</span>'
+            f'<span class="gt-value">{fmt_money(k["daily_sales"])}</span></span>'
+            f'<span class="gt-plus">+</span>'
+            f'<span class="gt-item"><span class="gt-label">Period totals · {esc(names)}</span>'
+            f'<span class="gt-value">{fmt_money(k["period_sales"])}</span></span>'
+            f'<span class="gt-plus">=</span>'
+            f'<span class="gt-item gt-grand"><span class="gt-label">Grand total</span>'
+            f'<span class="gt-value">{fmt_money(k["sales"])}</span></span></div>')
+
+
+def render_daily_table(pivot: pd.DataFrame, pay_cols: list[str], show_discount: bool, k: dict,
+                       periods: list[PeriodSummary]) -> None:
+    """One row per day with consolidated payment columns (Bank Cards, Cash, …), checks and total."""
+    if pivot.empty:
         return
+    pay_th = "".join(f'<th class="num">{esc(c)}</th>' for c in pay_cols)
     disc_th = '<th class="num">Discount</th>' if show_discount else ""
     rows = []
-    for day, block in daily.groupby("date", sort=True):
-        n = len(block)
-        first = True
-        for _, r in block.iterrows():
-            comp = "без оплаты" in str(r["payment_type"]).casefold()
-            disc_td = f'<td class="num">{fmt_disc(r["discount"])}</td>' if show_discount else ""
-            date_td = (f'<td class="date-cell" rowspan="{n + 1}">{esc(fmt_day(day))}<small>{day.strftime("%d.%m.%Y")}</small></td>'
-                       if first else "")
-            first = False
-            rows.append(f'<tr>{date_td}<td>{_pay(r["payment_type"], comp)}</td><td class="num">{fmt_n(r["checks"])}</td>'
-                        f'<td class="num">{fmt_n(r["sales"])}</td>{disc_td}</tr>')
-        d_disc = f'<td class="num">{fmt_n(block["discount"].sum())}</td>' if show_discount else ""
-        rows.append(f'<tr class="day-total"><td class="dim">Day total</td><td class="num">{fmt_n(block["checks"].sum())}</td>'
-                    f'<td class="num">{fmt_n(block["sales"].sum())}</td>{d_disc}</tr>')
-    g_disc = f'<td class="num">{fmt_n(daily["discount"].sum())}</td>' if show_discount else ""
-    rows.append(f'<tr class="grand"><td colspan="2">Period total · {daily["date"].nunique()} days</td>'
-                f'<td class="num">{fmt_n(daily["checks"].sum())}</td><td class="num">{fmt_n(daily["sales"].sum())}</td>{g_disc}</tr>')
+    for _, r in pivot.iterrows():
+        d = r["date"]
+        pay_td = "".join(f'<td class="num">{fmt_n(r[c]) if r[c] else "—"}</td>' for c in pay_cols)
+        disc_td = f'<td class="num">{fmt_disc(r["discount"])}</td>' if show_discount else ""
+        rows.append(f'<tr><td class="date-cell">{esc(fmt_day(d))}<small>{d.strftime("%d.%m.%Y")}</small></td>{pay_td}'
+                    f'<td class="num">{fmt_n(r["checks"])}</td><td class="num"><b>{fmt_n(r["sales"])}</b></td>{disc_td}</tr>')
+    pay_tot = "".join(f'<td class="num">{fmt_n(pivot[c].sum())}</td>' for c in pay_cols)
+    disc_tot = f'<td class="num">{fmt_n(pivot["discount"].sum())}</td>' if show_discount else ""
+    label = "Period total" if not periods else "Daily sections total"
+    rows.append(f'<tr class="grand"><td>{label} · {len(pivot)} day{"s" if len(pivot) != 1 else ""}</td>{pay_tot}'
+                f'<td class="num">{fmt_n(pivot["checks"].sum())}</td><td class="num">{fmt_n(pivot["sales"].sum())}</td>{disc_tot}</tr>')
     st.html(
-        f'<div class="card"><div class="card-title">Day-by-day breakdown<span class="muted">date × payment type · {config.CURRENCY}</span></div>'
-        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Date</th><th>Payment type</th><th class="num">Checks</th>'
-        f'<th class="num">Sales</th>{disc_th}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
+        f'<div class="card"><div class="card-title">Day-by-day breakdown<span class="muted">sales per payment type · {config.CURRENCY}</span></div>'
+        f'{render_grand_totals(k, periods)}'
+        f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Date</th>{pay_th}<th class="num">Checks</th>'
+        f'<th class="num">Total sales</th>{disc_th}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
     )
 
 
-def render_section_table(sections: pd.DataFrame, info: dict[str, SectionInfo], show_discount: bool) -> None:
+def render_section_table(sections: pd.DataFrame, show_discount: bool, title: str = "Sales by section") -> None:
     if sections.empty:
         return
     disc_th = '<th class="num">Discount</th>' if show_discount else ""
@@ -399,22 +482,28 @@ def render_section_table(sections: pd.DataFrame, info: dict[str, SectionInfo], s
         sec = config.SECTION_BY_KEY.get(r["section"])
         color = config.CHART_COLORS.get(r["section"], T["ink_3"])
         icon = sec.icon if sec else ""
-        tag = '<span class="tag-sample">Sample</span>' if bool(r["is_sample"]) else ""
+        tag = ""
+        if r["kind"] == "period" and r["period"]:
+            tag = f'<span class="tag-period">Period total · {esc(dates.label(*r["period"]))}</span>'
         width = int(round(float(r["share"]) * 120))
         disc_td = f'<td class="num">{fmt_disc(r["discount"])}</td>' if show_discount else ""
+        checks = fmt_n(r["checks"]) if pd.notna(r["checks"]) and r["checks"] else "—"
+        aov = fmt_n(r["aov"]) if pd.notna(r["aov"]) and r["aov"] else "—"
         rows.append(
             f'<tr><td><span class="dot" style="background:{color}"></span>{icon} <b>{esc(r["section"])}</b>{tag}</td>'
-            f'<td class="num">{fmt_n(r["checks"])}</td><td class="num">{fmt_n(r["sales"])}</td>{disc_td}'
-            f'<td class="num">{fmt_n(r["aov"])}</td>'
+            f'<td class="num">{checks}</td><td class="num">{fmt_n(r["sales"])}</td>{disc_td}'
+            f'<td class="num">{aov}</td>'
             f'<td class="num"><span class="share-bar" style="width:{width}px;--accent:{color}"></span>{fmt_pct(r["share"])}</td></tr>'
         )
-    t_checks, t_sales, t_disc = sections["checks"].sum(), sections["sales"].sum(), sections["discount"].sum()
+    t_checks = sections["checks"].fillna(0).sum()
+    t_sales, t_disc = sections["sales"].sum(), sections["discount"].sum()
     disc_tot = f'<td class="num">{fmt_n(t_disc)}</td>' if show_discount else ""
-    aov = t_sales / t_checks if t_checks else 0
-    rows.append(f'<tr class="grand"><td>All sections</td><td class="num">{fmt_n(t_checks)}</td><td class="num">{fmt_n(t_sales)}</td>'
-                f'{disc_tot}<td class="num">{fmt_n(aov)}</td><td class="num">100%</td></tr>')
+    aov_sales = sections.loc[sections["checks"].fillna(0) > 0, "sales"].sum()
+    aov = fmt_n(aov_sales / t_checks) if t_checks else "—"
+    rows.append(f'<tr class="grand"><td>All sections</td><td class="num">{fmt_n(t_checks) if t_checks else "—"}</td>'
+                f'<td class="num">{fmt_n(t_sales)}</td>{disc_tot}<td class="num">{aov}</td><td class="num">100%</td></tr>')
     st.html(
-        f'<div class="card"><div class="card-title">Sales by section<span class="muted">LOTs and event sections · {config.CURRENCY}</span></div>'
+        f'<div class="card"><div class="card-title">{esc(title)}<span class="muted">LOTs and event sections · {config.CURRENCY}</span></div>'
         f'<div class="tbl-wrap"><table class="dt"><thead><tr><th>Section</th><th class="num">Checks</th><th class="num">Sales</th>{disc_th}'
         f'<th class="num">AOV</th><th class="num">Share</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></div>'
     )
@@ -457,9 +546,11 @@ def render_charts(sections: pd.DataFrame, by_day: pd.DataFrame) -> None:
         st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
         _html_legend(labels, colors)
     with c2, st.container(border=True, key="chart_daily"):
-        st.html('<div class="card-title">Daily sales<span class="muted">stacked by section</span></div>')
+        st.html('<div class="card-title">Daily sales<span class="muted">daily sheets, stacked by section</span></div>')
         fig = go.Figure()
-        for sec_key, color in zip(labels, colors):
+        daily_labels = [l for l, c in zip(labels, colors) if l in set(by_day["section"])]
+        daily_colors = [c for l, c in zip(labels, colors) if l in set(by_day["section"])]
+        for sec_key, color in zip(daily_labels, daily_colors):
             part = by_day[by_day["section"] == sec_key].sort_values("date")
             if part.empty:
                 continue
@@ -476,7 +567,7 @@ def render_charts(sections: pd.DataFrame, by_day: pd.DataFrame) -> None:
             hovermode="x unified",
         )
         st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
-        _html_legend(labels, colors)
+        _html_legend(daily_labels, daily_colors)
 
 
 # ----------------------------------------------------------------------------- misc
@@ -492,6 +583,7 @@ def render_raw(records: pd.DataFrame, section_key: str, start: date, end: date) 
     with st.expander(f"Raw records · {len(records)} rows"):
         st.dataframe(records, width="stretch", hide_index=True,
                      column_config={"Чеков": st.column_config.NumberColumn(format="%d"),
+                                    "Payment": st.column_config.TextColumn(help="Bank Cards = POS Arcus + Банковские карты · Cash = Наличные"),
                                     "Сумма со скидкой": st.column_config.NumberColumn(format="%d"),
                                     "Сумма скидки": st.column_config.NumberColumn(format="%d")})
         fname = f"cop17_{section_key.replace(' ', '_').replace(',', '')}_{start:%Y%m%d}-{end:%Y%m%d}.csv"
