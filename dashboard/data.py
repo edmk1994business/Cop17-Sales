@@ -1,13 +1,15 @@
 """Data pipeline.
 
 1. Download ``COP-17-Sales.xlsx`` from Dropbox (direct link) or fall back to a local copy.
-2. Parse every live LOT sheet. The sheets are iiko OLAP *pivot* exports: a few title rows,
-   a header row, dimension labels that appear only on the first row of each block
-   (merged cells), ``… всего`` subtotal rows after every block and an ``Итого`` grand total.
-3. Generate sample data for the sections that have no sheet yet (LOT 4, side events,
-   state orders) over the same date range as the live data.
-4. Expose one tidy frame for all sections; ``General`` is the aggregate of every
-   sales section and ``Compliments`` is every ``без оплаты`` row.
+2. Parse every section sheet **by shape**:
+   * iiko OLAP *pivot* exports (LOT 3 / 8 / 9 / 10): a few title rows, a header row, dimension
+     labels only on the first row of each block (merged cells), ``… всего`` subtotal rows and an
+     ``Итого`` grand total → daily rows (date × payment type);
+   * "column C" summary sheets (LOT 4, side events, պետական պատվերներ): one total in column C
+     plus the date period written on the sheet → a period total.
+3. Consolidate payment types (POS Arcus + Банковские карты → Bank Cards, Наличные → Cash).
+4. Expose one tidy frame for all daily rows plus the period totals; ``General`` aggregates every
+   section and ``Compliments`` is every ``без оплаты`` row.
 """
 from __future__ import annotations
 
@@ -21,13 +23,16 @@ import pandas as pd
 import streamlit as st
 
 from . import config
-from .sample import generate_sample
 from .schema import NUMERIC, TIDY_COLUMNS, empty_tidy
 
 # ----------------------------------------------------------------------------- helpers
 _WS = re.compile(r"\s+")
-_SUBTOTAL = ("всего", "итого", "total")
+_SUBTOTAL = ("всего", "итого", "total", "ընդամենը", "ընդհանուր")
 _NUM_JUNK = re.compile(r"[\s  ֏₽$]")
+_DATE_RE = re.compile(r"(?<![\d.])(\d{1,2})[./](\d{1,2})[./](20\d{2}|\d{2})(?![\d.])")
+_DAY_RANGE_RE = re.compile(r"(?<![\d.])(\d{1,2})\s*[-–—]\s*(\d{1,2})[./](\d{1,2})[./](20\d{2})(?![\d.])")  # "19-30.10.2026"
+_DM_RANGE_RE = re.compile(r"(?<![\d.])(\d{1,2})[./](\d{1,2})\s*[-–—]\s*(\d{1,2})[./](\d{1,2})[./](20\d{2})(?![\d.])")  # "19.10-30.10.2026"
+_ISO_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
 
 def norm(value) -> str:
@@ -57,16 +62,49 @@ def clean_label(value) -> str:
     return text
 
 
+def map_payment(label: str) -> str:
+    """POS Arcus + Банковские карты → Bank Cards, Наличные → Cash; anything else keeps its label."""
+    return config.PAYMENT_MAP.get(norm(label), label)
+
+
+def parse_num_text(text: str) -> float | None:
+    """'12 345,00' → 12345.0 · '3,200,000' → 3200000 · '1.250.000' → 1250000 · '2,5' → 2.5."""
+    t = _NUM_JUNK.sub("", str(text))
+    if not t or t in ("-", ".", ",") or t.casefold() in ("nan", "none", "nat"):
+        return None
+    if _DATE_RE.search(t) or _ISO_RE.search(t):
+        return None  # "19.10.2026" is a date, not 19 million
+    if "," in t and "." in t:
+        dec = "," if t.rfind(",") > t.rfind(".") else "."
+        t = t.replace("." if dec == "," else ",", "").replace(",", ".")
+    elif "," in t:
+        head, _, tail = t.rpartition(",")
+        t = t.replace(",", "") if (t.count(",") > 1 or len(tail) == 3) else head + "." + tail
+    elif t.count(".") > 1 or (t.count(".") == 1 and len(t.rpartition(".")[2]) == 3):
+        t = t.replace(".", "")  # dots as thousands separators
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def cell_number(value) -> float | None:
+    """One cell → float, accepting text numbers; None when it is not a number (dates included)."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, (datetime, date, pd.Timestamp)):
+        return None
+    return parse_num_text(str(value))
+
+
 def to_number(series: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(series):
         return series.astype(float)
-    cleaned = (
-        series.astype(str)
-        .str.replace(_NUM_JUNK, "", regex=True)
-        .str.replace(",", ".", regex=False)
-        .replace({"": None, "nan": None, "None": None, "-": None})
-    )
-    return pd.to_numeric(cleaned, errors="coerce")
+    return pd.to_numeric(series.map(cell_number), errors="coerce")
 
 
 def to_date(series: pd.Series) -> pd.Series:
@@ -82,6 +120,49 @@ def to_date(series: pd.Series) -> pd.Series:
         if mask.any():
             out[mask] = pd.to_datetime(serial[mask], unit="D", origin="1899-12-30")
     return out.dt.date
+
+
+def cell_dates(value) -> list[date]:
+    """All dates mentioned in one cell: a datetime, '22.10.2026', '19-30.10.2026', '19.10-30.10.2026'."""
+    return extract_dates(value)[0]
+
+
+def cell_text(value) -> str:
+    """The cell's text with every date removed — what is left is the label."""
+    return extract_dates(value)[1]
+
+
+def extract_dates(value) -> tuple[list[date], str]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return [], ""
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return ([] if pd.isna(value) else [value.date()]), ""
+    if isinstance(value, date):
+        return [value], ""
+    if isinstance(value, (int, float)):
+        return [], ""  # a bare number in a summary sheet is an amount, never a date serial
+    text = str(value)
+    found: list[date] = []
+
+    def _add(y, m, d) -> None:
+        try:
+            found.append(date(int(y), int(m), int(d)))
+        except ValueError:
+            pass
+
+    # Most specific patterns first; each consumed span is blanked so it is not re-read by the next one.
+    def _consume(pattern, handler):
+        nonlocal text
+        for m in list(pattern.finditer(text)):
+            handler(m.groups())
+            text = text[:m.start()] + " " * (m.end() - m.start()) + text[m.end():]
+
+    _consume(_DM_RANGE_RE, lambda g: (_add(g[4], g[1], g[0]), _add(g[4], g[3], g[2])))
+    _consume(_DAY_RANGE_RE, lambda g: (_add(g[3], g[2], g[0]), _add(g[3], g[2], g[1])))
+    _consume(_DATE_RE, lambda g: _add(int(g[2]) if len(g[2]) == 4 else 2000 + int(g[2]), g[1], g[0]))
+    _consume(_ISO_RE, lambda g: _add(g[0], g[1], g[2]))
+    rest = _WS.sub(" ", re.sub(r"^[\s\-–—:;,.·՝]+|[\s\-–—:;,.·՝]+$", "", text)).strip()
+    return found, rest
 
 
 def is_compliment(payment_type) -> bool:
@@ -118,10 +199,14 @@ def find_header_row(raw: pd.DataFrame, max_scan: int = 40) -> int | None:
             best, best_hits = r, hits
         if hits >= 3:
             return r
-    return best if best_hits >= 2 else None
+    return best if best_hits >= 3 else None
 
 
-# ----------------------------------------------------------------------------- the parser
+def looks_like_pivot(raw: pd.DataFrame) -> bool:
+    return raw is not None and not raw.empty and find_header_row(raw) is not None
+
+
+# ----------------------------------------------------------------------------- iiko pivot parser
 def parse_sheet(raw: pd.DataFrame, section: str) -> pd.DataFrame:
     """Turn one iiko pivot sheet (read with header=None) into the tidy layout."""
     if raw is None or raw.empty:
@@ -158,7 +243,7 @@ def parse_sheet(raw: pd.DataFrame, section: str) -> pd.DataFrame:
     sub_mask = body[dim_cols].apply(lambda r: any(is_subtotal_label(v) for v in r), axis=1)
     body = body[~sub_mask].copy()
 
-    # 2. Forward-fill the merged dimension cells.
+    # 2. Forward-fill the merged dimension cells (so days appended at the bottom parse too).
     for c in dim_cols:
         body[c] = body[c].map(lambda v: None if is_blank(v) else v).ffill()
 
@@ -177,7 +262,8 @@ def parse_sheet(raw: pd.DataFrame, section: str) -> pd.DataFrame:
         if entity_cols else ""
     )
     tidy["date"] = to_date(body[date_col]) if date_col is not None else pd.NaT
-    tidy["payment_type"] = body[pay_col].map(clean_label) if pay_col is not None else "—"
+    tidy["payment_raw"] = body[pay_col].map(clean_label) if pay_col is not None else "—"
+    tidy["payment_type"] = tidy["payment_raw"].map(map_payment)
     for metric in NUMERIC:
         col = next((c for c, r in roles.items() if r == metric), None)
         tidy[metric] = to_number(body[col]).fillna(0.0) if col is not None else 0.0
@@ -189,19 +275,97 @@ def parse_sheet(raw: pd.DataFrame, section: str) -> pd.DataFrame:
     tidy = tidy[(tidy["checks"] != 0) | (tidy["sales"] != 0)]
     if tidy.empty:
         return empty_tidy()
-    tidy["is_compliment"] = tidy["payment_type"].map(is_compliment)
-    tidy["is_sample"] = False
+    tidy["is_compliment"] = tidy["payment_raw"].map(is_compliment)
 
-    keys = ["section", "entity", "date", "payment_type", "is_compliment", "is_sample"]
+    keys = ["section", "entity", "date", "payment_type", "payment_raw", "is_compliment"]
     out = tidy.groupby(keys, as_index=False, sort=True)[NUMERIC].sum()
     return out[TIDY_COLUMNS].reset_index(drop=True)
+
+
+# ----------------------------------------------------------------------------- column-C summary sheets
+@dataclass
+class PeriodSummary:
+    section: str
+    start: date
+    end: date
+    total: float
+    checks: int | None = None          # when the sheet states a check count
+    entries: list[tuple] = field(default_factory=list)   # (date|None, label, amount) rows found
+    period_from_sheet: bool = True     # False when the period had to be taken from the LOT data
+    total_label: str = ""
+
+    def covered_by(self, start: date, end: date) -> bool:
+        return start <= self.start and self.end <= end
+
+    def overlaps(self, start: date, end: date) -> bool:
+        return self.start <= end and start <= self.end
+
+
+def parse_period_sheet(raw: pd.DataFrame, section: str) -> PeriodSummary | None:
+    """A sheet holding one total in column C and its date period somewhere on the sheet."""
+    if raw is None or raw.empty or raw.shape[1] < 2:
+        return None
+    # The totals live in column C; if C holds nothing numeric, fall back to the right-most numeric column.
+    numeric_cols = [c for c in range(raw.shape[1]) if raw.iloc[:, c].map(cell_number).notna().any()]
+    if not numeric_cols:
+        return None
+    value_col = 2 if (raw.shape[1] > 2 and 2 in numeric_cols) else numeric_cols[-1]
+    col_c = raw.iloc[:, value_col]
+    labels = raw.iloc[:, [c for c in range(raw.shape[1]) if c != value_col][:2]]
+
+    # Every row with a number in column C becomes a candidate (label = text in A/B, date if any).
+    candidates: list[dict] = []
+    for i in range(len(raw)):
+        amount = cell_number(col_c.iloc[i])
+        if amount is None:
+            continue
+        a, b = labels.iloc[i, 0], labels.iloc[i, 1]
+        parts = [extract_dates(v) for v in (a, b) if not is_blank(v)]
+        text = " · ".join(t for _, t in parts if t)
+        found = [d for ds, _ in parts for d in ds]
+        candidates.append(dict(row=i, amount=amount, label=text, dates=found,
+                               is_total=is_subtotal_label(a) or is_subtotal_label(b),
+                               is_checks=any(k in norm(text) for k in ("чек", "заказ", "check", "order", "չեկ", "պատվեր")
+                                             ) and amount < 100_000))
+    if not candidates:
+        return None
+
+    checks_rows = [c for c in candidates if c["is_checks"]]
+    checks = int(round(checks_rows[0]["amount"])) if checks_rows else None
+    money = [c for c in candidates if not c["is_checks"]]
+    if not money:
+        return None
+    totals = [c for c in money if c["is_total"]]
+    entries = [c for c in money if not c["is_total"]]
+    if totals:
+        total, total_label = totals[-1]["amount"], totals[-1]["label"]
+    elif len(entries) == 1:
+        total, total_label = entries[0]["amount"], entries[0]["label"]
+        entries = []
+    else:
+        biggest = max(entries, key=lambda c: c["amount"])
+        rest = sum(c["amount"] for c in entries) - biggest["amount"]
+        if abs(biggest["amount"] - rest) <= max(1.0, 0.005 * biggest["amount"]):  # an unlabeled total row
+            total, total_label = biggest["amount"], biggest["label"]
+            entries = [c for c in entries if c is not biggest]
+        else:
+            total, total_label = float(sum(c["amount"] for c in entries)), "sum of rows"
+
+    # The period: every date written anywhere on the sheet.
+    all_dates = [d for v in raw.to_numpy().ravel() for d in cell_dates(v)]
+    if all_dates:
+        start, end, from_sheet = min(all_dates), max(all_dates), True
+    else:
+        start, end, from_sheet = config.EVENT_START, config.EVENT_END, False
+    rows = [((c["dates"][0] if c["dates"] else None), clean_label(c["label"]) or "—", c["amount"]) for c in entries]
+    return PeriodSummary(section, start, end, float(total), checks, rows, from_sheet, clean_label(total_label))
 
 
 # ----------------------------------------------------------------------------- workbook loading
 @dataclass
 class SectionInfo:
     key: str
-    source: str              # "live" | "sample" | "missing"
+    source: str              # "daily" | "period" | "missing"
     sheet: str | None = None
     rows: int = 0
     sales: float = 0.0
@@ -211,6 +375,7 @@ class SectionInfo:
 @dataclass
 class Dataset:
     df: pd.DataFrame
+    periods: dict[str, PeriodSummary] = field(default_factory=dict)
     info: dict[str, SectionInfo] = field(default_factory=dict)
     dmin: date | None = None
     dmax: date | None = None
@@ -220,12 +385,16 @@ class Dataset:
     workbook_sheets: tuple[str, ...] = ()
 
     @property
-    def live_count(self) -> int:
-        return sum(1 for i in self.info.values() if i.source == "live")
+    def is_empty(self) -> bool:
+        return self.df.empty and not self.periods
 
     @property
-    def sample_count(self) -> int:
-        return sum(1 for i in self.info.values() if i.source == "sample")
+    def daily_count(self) -> int:
+        return sum(1 for i in self.info.values() if i.source == "daily")
+
+    @property
+    def period_count(self) -> int:
+        return sum(1 for i in self.info.values() if i.source == "period")
 
 
 def _sheet_key(name: str) -> str:
@@ -267,48 +436,48 @@ def read_workbook(blob: bytes) -> dict[str, pd.DataFrame]:
 
 def build_dataset(sheets: dict[str, pd.DataFrame], origin: str, error: str | None = None) -> Dataset:
     frames: list[pd.DataFrame] = []
+    periods: dict[str, PeriodSummary] = {}
     info: dict[str, SectionInfo] = {}
 
-    # Live sheets first (any section may be live if its sheet exists in the workbook).
     for section in config.SALES_SECTIONS:
         name = find_sheet(sheets, section.sheet or section.key)
         if name is None:
+            info[section.key] = SectionInfo(section.key, "missing", None, 0, 0.0, "Sheet not found in the workbook.")
             continue
-        tidy = parse_sheet(sheets[name], section.key)
-        if tidy.empty:
-            info[section.key] = SectionInfo(section.key, "missing", name, 0, 0.0,
-                                            "Sheet found but no sales rows could be parsed.")
-            continue
-        frames.append(tidy)
-        info[section.key] = SectionInfo(section.key, "live", name, len(tidy),
-                                        float(tidy.loc[~tidy["is_compliment"], "sales"].sum()))
-
-    live = pd.concat(frames, ignore_index=True) if frames else empty_tidy()
-    if not live.empty:
-        dmin, dmax = live["date"].min(), live["date"].max()
-    else:
-        dmin, dmax = config.EVENT_START, config.EVENT_END
-
-    # Sample sections fill in only where no sheet exists.
-    for section in config.SALES_SECTIONS:
-        if section.key in info:
-            continue
-        if section.kind == "sample":
-            sample = generate_sample(section.key, dmin, dmax)
-            frames.append(sample)
-            info[section.key] = SectionInfo(section.key, "sample", None, len(sample),
-                                            float(sample.loc[~sample["is_compliment"], "sales"].sum()),
-                                            "No sheet in the workbook yet — showing generated sample data.")
+        raw = sheets[name]
+        if looks_like_pivot(raw):
+            tidy = parse_sheet(raw, section.key)
+            if tidy.empty:
+                info[section.key] = SectionInfo(section.key, "missing", name, 0, 0.0,
+                                                "Sheet found but no sales rows could be parsed.")
+                continue
+            frames.append(tidy)
+            info[section.key] = SectionInfo(section.key, "daily", name, len(tidy),
+                                            float(tidy.loc[~tidy["is_compliment"], "sales"].sum()))
         else:
-            info[section.key] = SectionInfo(section.key, "missing", None, 0, 0.0,
-                                            "Sheet not found in the workbook.")
+            summary = parse_period_sheet(raw, section.key)
+            if summary is None:
+                info[section.key] = SectionInfo(section.key, "missing", name, 0, 0.0,
+                                                "Sheet found but no total was found in column C.")
+                continue
+            periods[section.key] = summary
+            info[section.key] = SectionInfo(section.key, "period", name, len(summary.entries), summary.total)
 
     df = pd.concat(frames, ignore_index=True) if frames else empty_tidy()
     if not df.empty:
         df["date"] = pd.to_datetime(df["date"]).dt.date
         df = df.sort_values(["date", "section", "payment_type"]).reset_index(drop=True)
-    return Dataset(df=df, info=info, dmin=dmin, dmax=dmax, loaded_at=time.time(), origin=origin,
-                   error=error, workbook_sheets=tuple(sheets.keys()))
+
+    # Full period = earliest .. latest recorded date across every sheet (daily rows and period sheets).
+    starts = ([df["date"].min()] if not df.empty else []) + [p.start for p in periods.values() if p.period_from_sheet]
+    ends = ([df["date"].max()] if not df.empty else []) + [p.end for p in periods.values() if p.period_from_sheet]
+    dmin = min(starts) if starts else config.EVENT_START
+    dmax = max(ends) if ends else config.EVENT_END
+    for p in periods.values():  # a sheet without any date written on it spans the data range
+        if not p.period_from_sheet:
+            p.start, p.end = dmin, dmax
+    return Dataset(df=df, periods=periods, info=info, dmin=dmin, dmax=dmax, loaded_at=time.time(),
+                   origin=origin, error=error, workbook_sheets=tuple(sheets.keys()))
 
 
 @st.cache_data(ttl=config.CACHE_TTL_SECONDS, show_spinner=False)
@@ -337,7 +506,7 @@ def load_dataset(source_url: str, local_path: str) -> Dataset:
 
 # ----------------------------------------------------------------------------- selection & metrics
 def select(ds: Dataset, section_key: str, start: date, end: date) -> pd.DataFrame:
-    """Rows for one tab inside [start, end]. General = all sales sections minus compliments."""
+    """Daily rows for one tab inside [start, end]. General = all sections minus compliments."""
     df = ds.df
     if df.empty:
         return df
@@ -352,22 +521,57 @@ def select(ds: Dataset, section_key: str, start: date, end: date) -> pd.DataFram
     return df.loc[mask].copy()
 
 
-def kpis(df: pd.DataFrame) -> dict:
-    sales = float(df["sales"].sum()) if not df.empty else 0.0
-    checks = int(round(df["checks"].sum())) if not df.empty else 0
+def select_periods(ds: Dataset, section_key: str, start: date, end: date) -> list[PeriodSummary]:
+    """Period totals that belong to the tab and are fully covered by the selected range.
+
+    A period total is one number for its whole period, so it is counted only when the selected
+    range contains that period (always true for "Full Event Period"); it is never pro-rated."""
+    section = config.SECTION_BY_KEY[section_key]
+    if section.kind == "global":
+        pool = list(ds.periods.values())
+    elif section.kind == "sheet":
+        pool = [ds.periods[section_key]] if section_key in ds.periods else []
+    else:
+        pool = []
+    return [p for p in pool if p.covered_by(start, end)]
+
+
+def excluded_periods(ds: Dataset, section_key: str, start: date, end: date) -> list[PeriodSummary]:
+    """Period totals that touch the range but are not fully covered (so they are left out)."""
+    section = config.SECTION_BY_KEY[section_key]
+    if section.kind == "global":
+        pool = list(ds.periods.values())
+    elif section.kind == "sheet":
+        pool = [ds.periods[section_key]] if section_key in ds.periods else []
+    else:
+        pool = []
+    return [p for p in pool if p.overlaps(start, end) and not p.covered_by(start, end)]
+
+
+def kpis(df: pd.DataFrame, periods: list[PeriodSummary] | None = None) -> dict:
+    periods = periods or []
+    d_sales = float(df["sales"].sum()) if not df.empty else 0.0
+    d_checks = int(round(df["checks"].sum())) if not df.empty else 0
     discount = float(df["discount"].sum()) if not df.empty else 0.0
     gross = float(df["gross"].sum()) if not df.empty else 0.0
+    p_sales = sum(p.total for p in periods)
+    p_checks = sum(p.checks for p in periods if p.checks)
+    aov_sales = d_sales + sum(p.total for p in periods if p.checks)   # only sales whose checks are known
+    checks = d_checks + p_checks
+    unknown_checks = any(p.checks is None for p in periods)
     days = int(df["date"].nunique()) if not df.empty else 0
     return dict(
-        sales=sales,
+        sales=d_sales + p_sales,
+        daily_sales=d_sales,
+        period_sales=p_sales,
         checks=checks,
-        aov=(sales / checks) if checks else 0.0,
+        checks_partial=unknown_checks and bool(periods),
+        aov=(aov_sales / checks) if checks else 0.0,
         discount=discount,
-        gross=gross,
+        gross=gross + p_sales,
         days=days,
         has_discount=discount > 0,
-        is_sample=bool(df["is_sample"].all()) if not df.empty else False,
-        has_sample=bool(df["is_sample"].any()) if not df.empty else False,
+        has_periods=bool(periods),
     )
 
 
@@ -375,31 +579,51 @@ def payment_totals(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["payment_type", "checks", "sales", "discount", "share"])
     g = df.groupby("payment_type", as_index=False)[["checks", "sales", "discount"]].sum()
-    g = g.sort_values("sales", ascending=False).reset_index(drop=True)
+    g["order"] = g["payment_type"].map(lambda p: config.PAYMENT_ORDER.index(p) if p in config.PAYMENT_ORDER else 99)
+    g = g.sort_values(["order", "sales"], ascending=[True, False]).drop(columns="order").reset_index(drop=True)
     total = g["sales"].sum()
     g["share"] = g["sales"] / total if total else 0.0
     return g
 
 
-def daily_breakdown(df: pd.DataFrame) -> pd.DataFrame:
-    """Date × payment type rows, sorted by date then sales desc."""
+def payment_columns(df: pd.DataFrame) -> list[str]:
+    """Bank Cards, Cash, then any other payment type present — by sales, descending."""
     if df.empty:
-        return pd.DataFrame(columns=["date", "payment_type", "checks", "sales", "discount"])
-    g = df.groupby(["date", "payment_type"], as_index=False)[["checks", "sales", "discount"]].sum()
-    return g.sort_values(["date", "sales"], ascending=[True, False]).reset_index(drop=True)
+        return []
+    present = payment_totals(df)["payment_type"].tolist()
+    return [p for p in config.PAYMENT_ORDER if p in present] + [p for p in present if p not in config.PAYMENT_ORDER]
 
 
-def section_totals(df: pd.DataFrame) -> pd.DataFrame:
+def daily_pivot(df: pd.DataFrame) -> pd.DataFrame:
+    """One row per day: sales per payment column, total checks, total sales, discount."""
+    cols = payment_columns(df)
     if df.empty:
-        return pd.DataFrame(columns=["section", "checks", "sales", "discount", "aov", "share", "is_sample"])
-    g = df.groupby("section", as_index=False).agg(
-        checks=("checks", "sum"), sales=("sales", "sum"), discount=("discount", "sum"),
-        is_sample=("is_sample", "all"),
-    )
+        return pd.DataFrame(columns=["date", *cols, "checks", "sales", "discount"])
+    pv = df.pivot_table(index="date", columns="payment_type", values="sales", aggfunc="sum", fill_value=0.0)
+    pv = pv.reindex(columns=cols, fill_value=0.0)
+    tot = df.groupby("date")[["checks", "sales", "discount"]].sum()
+    out = pv.join(tot).reset_index().sort_values("date").reset_index(drop=True)
+    return out
+
+
+def section_totals(df: pd.DataFrame, periods: list[PeriodSummary] | None = None) -> pd.DataFrame:
+    rows = []
+    if not df.empty:
+        g = df.groupby("section", as_index=False).agg(checks=("checks", "sum"), sales=("sales", "sum"),
+                                                        discount=("discount", "sum"))
+        for _, r in g.iterrows():
+            rows.append(dict(section=r["section"], checks=int(r["checks"]), sales=float(r["sales"]),
+                             discount=float(r["discount"]), kind="daily", period=None))
+    for p in periods or []:
+        rows.append(dict(section=p.section, checks=p.checks, sales=p.total, discount=0.0, kind="period",
+                         period=(p.start, p.end)))
+    if not rows:
+        return pd.DataFrame(columns=["section", "checks", "sales", "discount", "kind", "period", "aov", "share"])
+    g = pd.DataFrame(rows)
     order = {s.key: i for i, s in enumerate(config.SECTIONS)}
     g["order"] = g["section"].map(order).fillna(99)
     g = g.sort_values("order").drop(columns="order").reset_index(drop=True)
-    g["aov"] = g.apply(lambda r: r["sales"] / r["checks"] if r["checks"] else 0.0, axis=1)
+    g["aov"] = g.apply(lambda r: (r["sales"] / r["checks"]) if r["checks"] else None, axis=1)
     total = g["sales"].sum()
     g["share"] = g["sales"] / total if total else 0.0
     return g
@@ -413,18 +637,13 @@ def daily_by_section(df: pd.DataFrame) -> pd.DataFrame:
 
 def raw_records(df: pd.DataFrame) -> pd.DataFrame:
     """Underlying rows for the table/CSV download with human column names."""
-    cols = ["date", "section", "entity", "payment_type", "checks", "sales", "discount", "is_sample"]
+    cols = ["date", "section", "entity", "payment_type", "payment_raw", "checks", "sales", "discount"]
     out = df[cols].copy()
     if (out["entity"] == "").all():
         out = out.drop(columns="entity")
     if out["discount"].sum() == 0:
         out = out.drop(columns="discount")
-    if not out["is_sample"].any():
-        out = out.drop(columns="is_sample")
-    rename = {"date": "Учетный день", "section": "Section", "entity": "Entity", "payment_type": "Тип оплаты",
-              "checks": "Чеков", "sales": "Сумма со скидкой", "discount": "Сумма скидки", "is_sample": "Sample"}
+    rename = {"date": "Учетный день", "section": "Section", "entity": "Entity", "payment_type": "Payment",
+              "payment_raw": "Тип оплаты (iiko)", "checks": "Чеков", "sales": "Сумма со скидкой",
+              "discount": "Сумма скидки"}
     return out.rename(columns=rename).sort_values(["Учетный день", "Section"]).reset_index(drop=True)
-
-
-def as_datetime(d: date) -> datetime:
-    return datetime(d.year, d.month, d.day)
