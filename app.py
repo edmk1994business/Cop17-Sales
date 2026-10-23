@@ -47,7 +47,7 @@ with action:
 
 if ds.error:
     st.warning(ds.error, icon="⚠️")
-if ds.df.empty:
+if ds.is_empty:
     st.error(
         "No sales data could be loaded. Check the Dropbox link in `.streamlit/secrets.toml` "
         "(`SOURCE_URL`, ending in `dl=1`) or place a copy at `data/COP-17-Sales.xlsx`.",
@@ -58,27 +58,38 @@ if ds.df.empty:
 # ------------------------------------------------------------------ navigation + period
 section_key = ui.render_tabs()
 section = config.SECTION_BY_KEY[section_key]
+info = ds.info.get(section_key)
 start, end = ui.render_date_controls(ds)
 
 # ------------------------------------------------------------------ data for this tab
-df = data.select(ds, section_key, start, end)
-k = data.kpis(df)
-ui.render_section_head(section, ds.info.get(section_key), k)
+df = data.select(ds, section_key, start, end)                 # daily rows (iiko pivot sheets)
+periods = data.select_periods(ds, section_key, start, end)   # column-C period totals fully inside the range
+excluded = data.excluded_periods(ds, section_key, start, end)
+k = data.kpis(df, periods)
+ui.render_section_head(section, info, ds)
 
-if df.empty:
+if df.empty and not periods:
+    ui.render_excluded_note(excluded)
     ui.render_empty(section, start, end, ds)
     st.stop()
 
-ui.render_kpis(k, section, start, end)
+ui.render_kpis(k, section, start, end, periods)
+ui.render_excluded_note(excluded)
 show_discount = k["has_discount"]  # "Сумма скидки" is omitted everywhere when it is 0
 
 if section.kind == "global":
-    sections = data.section_totals(df)
+    sections = data.section_totals(df, periods)
     ui.render_charts(sections, data.daily_by_section(df))
-    ui.render_section_table(sections, ds.info, show_discount)
+    ui.render_section_table(sections, show_discount)
 elif section.kind == "compliments":
-    ui.render_section_table(data.section_totals(df), ds.info, show_discount)  # where the compliments came from
+    ui.render_section_table(data.section_totals(df), show_discount, title="Compliments by section")
 
-ui.render_overall_totals(data.payment_totals(df), show_discount)
-ui.render_daily_table(data.daily_breakdown(df), show_discount)
-ui.render_raw(data.raw_records(df), section_key, start, end)
+if section.kind == "sheet":                                  # a period sheet: its column-C summary
+    for p in periods:
+        ui.render_period_card(p, ds.info.get(p.section))
+
+if not df.empty:
+    ui.render_overall_totals(data.payment_totals(df), show_discount,
+                             subtitle="by payment type · daily sheets only" if periods else "by payment type")
+    ui.render_daily_table(data.daily_pivot(df), data.payment_columns(df), show_discount, k, periods)
+    ui.render_raw(data.raw_records(df), section_key, start, end)
