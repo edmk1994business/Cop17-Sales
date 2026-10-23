@@ -204,22 +204,19 @@ def inject_css() -> None:
     @media (prefers-reduced-motion: reduce) {{ .kpi:hover {{ animation: none; }} }}
 
     /* ---- section cards (General) — the whole card is a button ---- */
-    [class*="st-key-seccard_"] {{ position: relative; }}
-    [class*="st-key-seccard_"] [data-testid="stVerticalBlock"] {{ gap: 0; }}
-    [class*="st-key-open_"] {{ position:absolute; inset:0; z-index:2; }}
-    [class*="st-key-open_"] button {{ position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; border:0; padding:0; margin:0; touch-action:manipulation; -webkit-tap-highlight-color: transparent; }}
-    [class*="st-key-open_"] button:focus-visible {{ opacity:1; background:transparent; outline:3px solid var(--green); outline-offset:-3px; border-radius:var(--radius); }}
-    [class*="st-key-open_"] button * {{ display:none; }}
-    /* cards never move or float — a tap must map 1:1 onto the button underneath; mouse users get a border hint */
-    .sec-card {{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px 12px; position:relative; overflow:hidden; min-height:138px; pointer-events:none; }}
-    .sec-card:before {{ content:""; position:absolute; left:0; right:0; top:0; height:4px; background: var(--accent); }}
+    /* section cards are plain links (?section=…): a real navigation, so they work on every browser */
+    .sec-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap:12px; margin:6px 0 4px; }}
+    a.sec-card, a.sec-card:visited {{ color: var(--ink); text-decoration:none; }}
+    .sec-card {{ display:block; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px 16px 12px; position:relative; overflow:hidden; min-height:138px; cursor:pointer; -webkit-tap-highlight-color: rgba(46,125,79,.12); touch-action: manipulation; }}
+    .sec-card:active {{ background:#F8FAF7; }}
+    .sec-card:focus-visible {{ outline:3px solid var(--green); outline-offset:2px; }}
     @media (hover: hover) and (pointer: fine) {{
-        [class*="st-key-seccard_"]:hover .sec-card {{ border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }}
+        .sec-card:hover {{ border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }}
     }}
-    [class*="st-key-open_"] button:active + * .sec-card, [class*="st-key-seccard_"]:has(button:active) .sec-card {{ background: #F8FAF7; }}
+    .sec-card:before {{ content:""; position:absolute; left:0; right:0; top:0; height:4px; background: var(--accent); }}
     .sec-card-head {{ display:flex; align-items:center; gap:10px; }}
     .sec-card-icon {{ width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:1.1rem; background: color-mix(in srgb, var(--accent) 12%, white); flex:0 0 auto; }}
-    .sec-card-name {{ font-weight:800; font-size:.95rem; line-height:1.2; letter-spacing:-0.005em; }}
+    .sec-card-name {{ font-weight:800; font-size:.95rem; line-height:1.2; letter-spacing:-0.005em; padding-right:52px; }}
     .sec-card-kind {{ font-size:.68rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color: var(--ink-3); margin-top:2px; }}
     .sec-card-value {{ font-size:1.35rem; font-weight:800; letter-spacing:-0.02em; margin-top:10px; font-variant-numeric: tabular-nums; white-space:nowrap; }}
     .sec-card-value .unit {{ font-size:.85rem; font-weight:600; color:var(--ink-3); margin-left:3px; }}
@@ -331,16 +328,64 @@ def render_header(ds: Dataset) -> None:
 
 
 # ----------------------------------------------------------------------------- navigation & dates
-def _request_scroll_top() -> None:
+def preset_slug(preset: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", preset.casefold()).strip("-")
+
+
+SLUG_TO_PRESET = {preset_slug(p): p for p in config.PRESETS}
+
+
+def apply_query_params() -> None:
+    """Called once per session, before any widget exists: ?section=, ?preset=, ?start=, ?end= seed the
+    tab and the period. A card link is a fresh page load, so this is how the click lands on its tab."""
+    if st.session_state.get("_url_applied"):
+        return
+    st.session_state["_url_applied"] = True
+    qp = st.query_params
+    sec_key = SLUG_TO_SECTION.get(str(qp.get("section", "")).casefold())
+    if sec_key:
+        st.session_state["section"] = config.SECTION_BY_KEY[sec_key].label
+        st.session_state["scroll_top"] = True
+    preset = SLUG_TO_PRESET.get(str(qp.get("preset", "")).casefold())
+    if preset:
+        st.session_state["preset"] = preset
+    for param, key in (("start", "custom_start"), ("end", "custom_end")):
+        raw = qp.get(param)
+        if raw:
+            try:
+                st.session_state[key] = date.fromisoformat(str(raw))
+            except ValueError:
+                pass
+
+
+def nav_query() -> str:
+    """The current period selection as query parameters, appended to every card link."""
+    preset = st.session_state.get("preset", config.PRESET_FULL)
+    parts = [f"preset={preset_slug(preset)}"]
+    if preset == config.PRESET_CUSTOM:
+        for param, key in (("start", "custom_start"), ("end", "custom_end")):
+            value = st.session_state.get(key)
+            if value:
+                parts.append(f"{param}={value.isoformat()}")
+    return "&".join(parts)
+
+
+def _on_tab_change() -> None:
+    """A tab-pill click: land at the top and keep the URL in step (so a reload stays on this tab)."""
     st.session_state["scroll_top"] = True
+    label = st.session_state.get("section")
+    for sec in config.SECTIONS:
+        if sec.label == label:
+            st.query_params["section"] = section_slug(sec.key)
+            break
 
 
 def render_tabs() -> str:
-    """The tab bar. Any tab change (click, or a card's callback) lands the page at the very top."""
+    """The tab bar. Any tab change (pill click or card link) lands the page at the very top."""
     labels = [s.label for s in config.SECTIONS]
     with st.container(key="tabs"):
         choice = st.radio("Section", labels, horizontal=True, label_visibility="collapsed", key="section",
-                          width="stretch", on_change=_request_scroll_top)
+                          width="stretch", on_change=_on_tab_change)
     return config.SECTIONS[labels.index(choice)].key
 
 
@@ -590,28 +635,33 @@ def render_section_table(sections: pd.DataFrame, show_discount: bool, title: str
 
 
 # ----------------------------------------------------------------------------- section cards (General)
-def render_section_cards(sections: pd.DataFrame, k: dict, on_pick, per_row: int = 3) -> None:
-    """One clickable card per section (+ a grand-total tile). Clicking opens that section's tab."""
+def section_slug(key: str) -> str:
+    """'Restaurant Area' → 'restaurant-area' (what the ?section= query parameter carries)."""
+    return re.sub(r"[^a-z0-9]+", "-", key.casefold()).strip("-")
+
+
+SLUG_TO_SECTION = {section_slug(sec.key): sec.key for sec in config.SECTIONS}
+
+
+def section_href(section_key: str, nav_query: str) -> str:
+    return f"?section={section_slug(section_key)}" + (f"&{nav_query}" if nav_query else "")
+
+
+def render_section_cards(sections: pd.DataFrame, k: dict, nav_query: str) -> None:
+    """One card per section (+ a grand-total tile). Each card is a link to ?section=<slug>: clicking it
+    navigates to that tab and, being a page load, always starts at the top. ``nav_query`` carries the
+    current period selection so the date filter survives the jump."""
     if sections.empty:
         return
-    st.html('<div class="card-title" style="margin:14px 0 2px">Sales by section'
-            '<span class="muted">click a card to open its tab</span></div>')
     rows = list(sections.itertuples(index=False))
-    cards = [("section", r) for r in rows] + [("total", None)]
-    for start_i in range(0, len(cards), per_row):
-        cols = st.columns(per_row)
-        for j, (kind, r) in enumerate(cards[start_i:start_i + per_row]):
-            i = start_i + j
-            with cols[j], st.container(key=f"seccard_{i}"):
-                if kind == "total":
-                    st.html(_total_card_html(k, len(rows)))
-                    st.button("Back to top", key=f"open_{i}", on_click=on_pick, args=(None,))
-                else:
-                    st.html(_section_card_html(r))
-                    st.button(f"Open {r.section}", key=f"open_{i}", on_click=on_pick, args=(r.section,))
+    cards = "".join(_section_card_html(r, section_href(r.section, nav_query)) for r in rows)
+    cards += _total_card_html(k, len(rows), section_href("General / Global View", nav_query))
+    st.html('<div class="card-title" style="margin:14px 0 2px">Sales by section'
+            '<span class="muted">tap a card to open its tab</span></div>'
+            f'<div class="sec-grid">{cards}</div>')
 
 
-def _section_card_html(r) -> str:
+def _section_card_html(r, href: str) -> str:
     sec = config.SECTION_BY_KEY.get(r.section)
     icon = sec.icon if sec else "▪"
     color = config.CHART_COLORS.get(r.section, T["ink_3"])
@@ -624,28 +674,29 @@ def _section_card_html(r) -> str:
     disc = f'<span>Discount <b>{fmt_n(r.discount)}</b></span>' if r.discount else ""
     pct = max(0.0, min(100.0, float(r.share) * 100))
     return (
-        f'<div class="sec-card" style="--accent:{color}">'
+        f'<a class="sec-card" href="{esc(href)}" target="_self" style="--accent:{color}" aria-label="Open {esc(r.section)}">'
         f'<div class="sec-card-head"><div class="sec-card-icon">{icon}</div>'
         f'<div><div class="sec-card-name">{esc(r.section)}</div><div class="sec-card-kind">{kind}</div></div></div>'
         f'<div class="sec-card-open">Open ↗</div>'
         f'<div class="sec-card-value">{fmt_n(r.sales)}<span class="unit">{config.CURRENCY}</span></div>'
         f'<div class="sec-card-meta"><span>Checks <b>{checks}</b></span><span>AOV <b>{aov}</b></span>'
         f'<span>Share <b>{fmt_pct(r.share)}</b></span>{disc}</div>'
-        f'<div class="sec-card-share"><span style="width:{pct:.1f}%"></span></div></div>'
+        f'<div class="sec-card-share"><span style="width:{pct:.1f}%"></span></div></a>'
     )
 
 
-def _total_card_html(k: dict, n_sections: int) -> str:
+def _total_card_html(k: dict, n_sections: int, href: str) -> str:
     checks = fmt_n(k["checks"]) if k["checks"] else "—"
     aov = fmt_n(k["aov"]) if k["checks"] else "—"
     return (
-        f'<div class="sec-card total" style="--accent:{T["green"]}">'
+        f'<a class="sec-card total" href="{esc(href)}" target="_self" style="--accent:{T["green"]}" aria-label="Back to the top of General">'
         f'<div class="sec-card-head"><div class="sec-card-icon">Σ</div>'
         f'<div><div class="sec-card-name">All sections</div><div class="sec-card-kind">{n_sections} sections · grand total</div></div></div>'
+        f'<div class="sec-card-open">Top ↑</div>'
         f'<div class="sec-card-value">{fmt_n(k["sales"])}<span class="unit">{config.CURRENCY}</span></div>'
         f'<div class="sec-card-meta"><span>Checks <b>{checks}</b></span><span>AOV <b>{aov}</b></span>'
         f'<span>Share <b>100%</b></span></div>'
-        f'<div class="sec-card-share"><span style="width:100%"></span></div></div>'
+        f'<div class="sec-card-share"><span style="width:100%"></span></div></a>'
     )
 
 
@@ -656,6 +707,7 @@ def scroll_to_top() -> None:
         """<script>
         (function () {
           var win = window.parent, doc = win.document;
+          try { if (win.history && win.history.scrollRestoration) { win.history.scrollRestoration = 'manual'; } } catch (e) {}
           function go(behavior) {
             var targets = [doc.querySelector('section[data-testid="stMain"]'), doc.querySelector('section.main'),
                            doc.querySelector('[data-testid="stAppViewContainer"]'), doc.scrollingElement, doc.documentElement, doc.body];
