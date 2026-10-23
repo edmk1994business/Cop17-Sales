@@ -65,11 +65,11 @@ if ds.is_empty:
 
 # ------------------------------------------------------------------ navigation + period
 section_key = ui.render_tabs()
+if st.session_state.pop("scroll_top", False):             # set by a tab click or a section-card click
+    ui.scroll_to_top()
 section = config.SECTION_BY_KEY[section_key]
 info = ds.info.get(section_key)
 start, end = ui.render_date_controls(ds)
-if st.session_state.pop("scroll_top", False):
-    ui.scroll_to_top()
 
 # ------------------------------------------------------------------ data for this tab
 df = data.select(ds, section_key, start, end)                 # daily rows (iiko pivot sheets)
