@@ -1,4 +1,4 @@
-"""COP17 2026 Armenia — Executive Sales Dashboard.
+"""COP17 2026 Armenia — Executive Sales Console.
 
 Run locally:   streamlit run app.py
 Streamlit Cloud: main file = app.py, Python 3.11+, secrets → SOURCE_URL (optional).
@@ -36,6 +36,14 @@ if st.query_params.get("refresh"):
 with st.spinner("Loading sales workbook…"):
     ds = data.load_dataset(SOURCE_URL, LOCAL_PATH)
 
+
+def go_to_section(section_key: str | None) -> None:
+    """Card click on General: switch the tab (None = stay) and scroll to the top on the rerun."""
+    if section_key is not None:
+        st.session_state["section"] = config.SECTION_BY_KEY[section_key].label
+    st.session_state["scroll_top"] = True
+
+
 # ------------------------------------------------------------------ header row
 head, action = st.columns([6, 1.2], vertical_alignment="center")
 with head:
@@ -50,7 +58,7 @@ if ds.error:
 if ds.is_empty:
     st.error(
         "No sales data could be loaded. Check the Dropbox link in `.streamlit/secrets.toml` "
-        "(`SOURCE_URL`, ending in `dl=1`) or place a copy at `data/COP-17-Sales.xlsx`.",
+        "(`SOURCE_URL`) or place a copy at `data/COP-17-Sales.xlsx`.",
         icon="📄",
     )
     st.stop()
@@ -60,10 +68,12 @@ section_key = ui.render_tabs()
 section = config.SECTION_BY_KEY[section_key]
 info = ds.info.get(section_key)
 start, end = ui.render_date_controls(ds)
+if st.session_state.pop("scroll_top", False):
+    ui.scroll_to_top()
 
 # ------------------------------------------------------------------ data for this tab
 df = data.select(ds, section_key, start, end)                 # daily rows (iiko pivot sheets)
-periods = data.select_periods(ds, section_key, start, end)   # column-C period totals fully inside the range
+periods = data.select_periods(ds, section_key, start, end)   # period totals fully inside the range
 excluded = data.excluded_periods(ds, section_key, start, end)
 k = data.kpis(df, periods)
 ui.render_section_head(section, info, ds)
@@ -80,11 +90,11 @@ show_discount = k["has_discount"]  # "Сумма скидки" is omitted everyw
 if section.kind == "global":
     sections = data.section_totals(df, periods)
     ui.render_charts(sections, data.daily_by_section(df))
-    ui.render_section_table(sections, show_discount)
+    ui.render_section_cards(sections, k, go_to_section)          # click → opens that tab, scrolls to top
 elif section.kind == "compliments":
     ui.render_section_table(data.section_totals(df), show_discount, title="Compliments by section")
 
-if section.kind == "sheet":                                  # a period sheet: its column-C summary
+if section.kind == "sheet":                                  # a period-summary sheet: its summary card
     for p in periods:
         ui.render_period_card(p, ds.info.get(p.section))
 
