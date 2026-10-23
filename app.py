@@ -4,8 +4,9 @@ Run locally:   streamlit run app.py
 Streamlit Cloud: main file = app.py, Python 3.11+, secrets → SOURCE_URL (optional).
 
 Page order: masthead → date controls → ↻ Refresh data → section tabs → section page.
-Navigation: the tab pills are an st.radio; the section cards on General are links to ?section=<slug>,
-which apply_query_params() turns into the selected tab on the fresh page load (always at the top).
+Navigation: the tab pills are an st.radio. The section cards on General are links to ?section=<slug>
+whose clicks a small bridge script redirects to the matching pill (an in-app rerun, no page reload);
+without scripting the link itself still works, and apply_query_params() turns it into the tab.
 """
 from __future__ import annotations
 
@@ -62,6 +63,7 @@ if ui.render_refresh_button():
     data.load_dataset.clear()
     st.rerun()
 section_key = ui.render_tabs()
+ui.install_nav_bridge()                                    # section-card click = pill click (no reload)
 if st.session_state.pop("scroll_top", False):             # set by a tab click or a section-card click
     ui.scroll_to_top()
 section = config.SECTION_BY_KEY[section_key]
