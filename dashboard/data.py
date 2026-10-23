@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import re
 import time
+import warnings
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -63,8 +64,16 @@ def clean_label(value) -> str:
 
 
 def map_payment(label: str) -> str:
-    """POS Arcus + Банковские карты → Bank Cards, Наличные → Cash; anything else keeps its label."""
-    return config.PAYMENT_MAP.get(norm(label), label)
+    """POS Arcus + Банковские карты → Bank Cards · Наличные → Cash · Փոխանցում… → Bank Transfers / Invoices.
+
+    Exact labels first, then prefixes; anything unknown keeps its own label."""
+    text = norm(label)
+    if text in config.PAYMENT_MAP:
+        return config.PAYMENT_MAP[text]
+    for prefix, target in config.PAYMENT_PREFIXES.items():
+        if text.startswith(prefix):
+            return target
+    return label
 
 
 def parse_num_text(text: str) -> float | None:
@@ -114,7 +123,9 @@ def to_date(series: pd.Series) -> pd.Series:
     else:
         text = series.astype(str).str.strip()
         text = text.str.replace(r"\s*(всего|итого)\s*$", "", regex=True, flags=re.IGNORECASE)
-        out = pd.to_datetime(text, dayfirst=True, errors="coerce")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)   # mixed/odd strings are expected here
+            out = pd.to_datetime(text, dayfirst=True, errors="coerce")
         serial = pd.to_numeric(text, errors="coerce")
         mask = out.isna() & serial.between(20_000, 80_000)
         if mask.any():
@@ -301,44 +312,73 @@ class PeriodSummary:
         return self.start <= end and start <= self.end
 
 
+_CONNECTORS = {"по", "с", "от", "до", "to", "from", "ից", "մինչև", "период", "ժամանակահատված", "period",
+               "-", "–", "—", ":", "/"}
+
+
+def _label_text(text: str) -> str:
+    """What is left of a cell once dates and connector words ('по', 'ից', 'period') are removed."""
+    tokens = [t for t in re.split(r"\s+", text) if t and t.casefold().strip(".,;:") not in _CONNECTORS]
+    return clean_label(" ".join(tokens)).strip(" ·")
+
+
 def parse_period_sheet(raw: pd.DataFrame, section: str) -> PeriodSummary | None:
-    """A sheet holding one total in column C and its date period somewhere on the sheet."""
+    """A sheet holding one period total rather than daily check rows.
+
+    The amount column is, in order of preference, the column headed «Сумма со скидкой», column C,
+    or the right-most numeric column. The total is the row labelled Итого / всего / Ընդամենը, else
+    the single amount, else the sum of the lines. The period is every date written on the sheet
+    («01.10.2026 по 21.10.2026», «19-30.10.2026», date cells). A «Чеков» column or row gives checks.
+    """
     if raw is None or raw.empty or raw.shape[1] < 2:
         return None
-    # The totals live in column C; if C holds nothing numeric, fall back to the right-most numeric column.
-    numeric_cols = [c for c in range(raw.shape[1]) if raw.iloc[:, c].map(cell_number).notna().any()]
+    raw = raw.dropna(axis=0, how="all").reset_index(drop=True)   # keep column letters intact (C stays C)
+    raw.columns = range(raw.shape[1])
+    n_cols = raw.shape[1]
+
+    header_row, sales_col, checks_col = None, None, None
+    for r in range(min(15, len(raw))):
+        roles = {c: classify_header(raw.iat[r, c]) for c in range(n_cols)}
+        if "sales" in roles.values():
+            header_row = r
+            sales_col = next(c for c, k in roles.items() if k == "sales")
+            checks_col = next((c for c, k in roles.items() if k == "checks"), None)
+            break
+    numeric_cols = [c for c in range(n_cols) if raw[c].map(cell_number).notna().any()]
     if not numeric_cols:
         return None
-    value_col = 2 if (raw.shape[1] > 2 and 2 in numeric_cols) else numeric_cols[-1]
-    col_c = raw.iloc[:, value_col]
-    labels = raw.iloc[:, [c for c in range(raw.shape[1]) if c != value_col][:2]]
+    if sales_col is None or sales_col not in numeric_cols:
+        sales_col = 2 if 2 in numeric_cols else numeric_cols[-1]
+    label_cols = [c for c in range(n_cols) if c not in (sales_col, checks_col)][:3]
 
-    # Every row with a number in column C becomes a candidate (label = text in A/B, date if any).
     candidates: list[dict] = []
     for i in range(len(raw)):
-        amount = cell_number(col_c.iloc[i])
+        if i == header_row:
+            continue
+        amount = cell_number(raw.iat[i, sales_col])
         if amount is None:
             continue
-        a, b = labels.iloc[i, 0], labels.iloc[i, 1]
-        parts = [extract_dates(v) for v in (a, b) if not is_blank(v)]
-        text = " · ".join(t for _, t in parts if t)
-        found = [d for ds, _ in parts for d in ds]
-        candidates.append(dict(row=i, amount=amount, label=text, dates=found,
-                               is_total=is_subtotal_label(a) or is_subtotal_label(b),
-                               is_checks=any(k in norm(text) for k in ("чек", "заказ", "check", "order", "չեկ", "պատվեր")
-                                             ) and amount < 100_000))
+        cells = [raw.iat[i, c] for c in label_cols if not is_blank(raw.iat[i, c])]
+        parts = [extract_dates(v) for v in cells]
+        text = " · ".join(t for t in (_label_text(t) for _, t in parts) if t)
+        found = [d for ds_, _ in parts for d in ds_]
+        is_total = any(is_subtotal_label(v) for v in cells)
+        is_checks = checks_col is None and amount < 100_000 and any(
+            k in norm(text) for k in ("чек", "заказ", "check", "order", "չեկ", "պատվեր"))
+        checks_here = cell_number(raw.iat[i, checks_col]) if checks_col is not None else None
+        candidates.append(dict(row=i, amount=amount, label=text, dates=found, is_total=is_total,
+                               is_checks=is_checks, checks=checks_here))
     if not candidates:
         return None
 
     checks_rows = [c for c in candidates if c["is_checks"]]
-    checks = int(round(checks_rows[0]["amount"])) if checks_rows else None
     money = [c for c in candidates if not c["is_checks"]]
     if not money:
         return None
     totals = [c for c in money if c["is_total"]]
     entries = [c for c in money if not c["is_total"]]
     if totals:
-        total, total_label = totals[-1]["amount"], totals[-1]["label"]
+        total, total_label = totals[-1]["amount"], (totals[-1]["label"] or "Итого row")
     elif len(entries) == 1:
         total, total_label = entries[0]["amount"], entries[0]["label"]
         entries = []
@@ -351,14 +391,29 @@ def parse_period_sheet(raw: pd.DataFrame, section: str) -> PeriodSummary | None:
         else:
             total, total_label = float(sum(c["amount"] for c in entries)), "sum of rows"
 
-    # The period: every date written anywhere on the sheet.
+    checks: int | None = None
+    if checks_col is not None:
+        if totals and totals[-1]["checks"] is not None:
+            checks = int(round(totals[-1]["checks"]))
+        elif any(c["checks"] is not None for c in entries):
+            checks = int(round(sum(c["checks"] or 0 for c in entries)))
+        elif len(entries) == 0 and money and money[0]["checks"] is not None:
+            checks = int(round(money[0]["checks"]))
+    elif checks_rows:
+        checks = int(round(checks_rows[0]["amount"]))
+
     all_dates = [d for v in raw.to_numpy().ravel() for d in cell_dates(v)]
     if all_dates:
-        start, end, from_sheet = min(all_dates), max(all_dates), True
+        start_, end_, from_sheet = min(all_dates), max(all_dates), True
     else:
-        start, end, from_sheet = config.EVENT_START, config.EVENT_END, False
-    rows = [((c["dates"][0] if c["dates"] else None), clean_label(c["label"]) or "—", c["amount"]) for c in entries]
-    return PeriodSummary(section, start, end, float(total), checks, rows, from_sheet, clean_label(total_label))
+        start_, end_, from_sheet = config.EVENT_START, config.EVENT_END, False
+    rows = []
+    for c in entries:
+        label = c["label"] or "—"
+        mapped = map_payment(label)
+        line_date = c["dates"][0] if len(c["dates"]) == 1 else None   # a range on the line is the period, not its date
+        rows.append((line_date, mapped if mapped != label else label, c["amount"]))
+    return PeriodSummary(section, start_, end_, float(total), checks, rows, from_sheet, total_label)
 
 
 # ----------------------------------------------------------------------------- workbook loading
@@ -401,15 +456,20 @@ def _sheet_key(name: str) -> str:
     return re.sub(r"[\s_\-]+", "", norm(name))
 
 
-def find_sheet(sheets: dict[str, pd.DataFrame], wanted: str) -> str | None:
-    want = _sheet_key(wanted)
-    for name in sheets:
-        if _sheet_key(name) == want:
-            return name
-    for name in sheets:  # "LOT 3 (final)" still matches "LOT 3", but "LOT 10" never matches "LOT 1"
-        key = _sheet_key(name)
-        if key.startswith(want) and not key[len(want):len(want) + 1].isdigit():
-            return name
+def find_sheet(sheets: dict[str, pd.DataFrame], wanted: tuple[str, ...] | str) -> str | None:
+    """Match a workbook sheet to one of the wanted names, tolerant of case, spaces and suffixes."""
+    names = (wanted,) if isinstance(wanted, str) else wanted
+    for w in names:
+        want = _sheet_key(w)
+        for name in sheets:
+            if _sheet_key(name) == want:
+                return name
+    for w in names:  # "LOT 3 (final)" still matches "LOT 3", but "LOT 10" never matches "LOT 1"
+        want = _sheet_key(w)
+        for name in sheets:
+            key = _sheet_key(name)
+            if key.startswith(want) and not key[len(want):len(want) + 1].isdigit():
+                return name
     return None
 
 
@@ -440,28 +500,25 @@ def build_dataset(sheets: dict[str, pd.DataFrame], origin: str, error: str | Non
     info: dict[str, SectionInfo] = {}
 
     for section in config.SALES_SECTIONS:
-        name = find_sheet(sheets, section.sheet or section.key)
+        name = find_sheet(sheets, section.sheets or (section.key,))
         if name is None:
-            info[section.key] = SectionInfo(section.key, "missing", None, 0, 0.0, "Sheet not found in the workbook.")
+            info[section.key] = SectionInfo(section.key, "missing", None, 0, 0.0,
+                                            f"No sheet named {' / '.join(section.sheets)} in the workbook.")
             continue
         raw = sheets[name]
-        if looks_like_pivot(raw):
-            tidy = parse_sheet(raw, section.key)
-            if tidy.empty:
-                info[section.key] = SectionInfo(section.key, "missing", name, 0, 0.0,
-                                                "Sheet found but no sales rows could be parsed.")
-                continue
+        tidy = parse_sheet(raw, section.key) if looks_like_pivot(raw) else empty_tidy()
+        if not tidy.empty:
             frames.append(tidy)
             info[section.key] = SectionInfo(section.key, "daily", name, len(tidy),
                                             float(tidy.loc[~tidy["is_compliment"], "sales"].sum()))
-        else:
-            summary = parse_period_sheet(raw, section.key)
-            if summary is None:
-                info[section.key] = SectionInfo(section.key, "missing", name, 0, 0.0,
-                                                "Sheet found but no total was found in column C.")
-                continue
-            periods[section.key] = summary
-            info[section.key] = SectionInfo(section.key, "period", name, len(summary.entries), summary.total)
+            continue
+        summary = parse_period_sheet(raw, section.key)   # period-summary sheet (or a pivot with no dates)
+        if summary is None:
+            info[section.key] = SectionInfo(section.key, "missing", name, 0, 0.0,
+                                            "Sheet found, but neither daily rows nor a period total could be read.")
+            continue
+        periods[section.key] = summary
+        info[section.key] = SectionInfo(section.key, "period", name, len(summary.entries), summary.total)
 
     df = pd.concat(frames, ignore_index=True) if frames else empty_tidy()
     if not df.empty:
